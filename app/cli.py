@@ -1,6 +1,6 @@
 import click
 from pathlib import Path
-from .services.file_service import FileService
+from .utils import get_transcripts
 from .services.index import IndexManager
 import logging
 
@@ -23,9 +23,9 @@ def generate_index(data_dir: Path, output_file: Path):
     """
     logger.info(f"Generating index from {data_dir} to {output_file}")
     
-    # Initialize services
-    file_svc = FileService(data_dir)
-    index_mgr = IndexManager(file_svc=file_svc)
+    # Get transcript records
+    file_records = get_transcripts(data_dir)
+    index_mgr = IndexManager(file_records=file_records)
     
     # Save the index
     index_mgr.save_index(output_file)

@@ -4,7 +4,6 @@ from .services.analytics_service import AnalyticsService
 import os
 from dotenv import load_dotenv, dotenv_values 
 from flask_oauthlib.client import OAuth
-from .services.file_service import FileService
 from .services.index import IndexManager
 from .services.search import SearchService
 
@@ -49,26 +48,26 @@ def create_app(data_dir: str, index_file: str = None):
     app.register_blueprint(auth.bp)
     app.register_blueprint(export.bp)
     app.register_blueprint(audio.bp)
-    
+        
     return app
 
-def init_index_manager(app, file_service=None, index_file=None, force_reindex=False):
+def init_index_manager(app, file_records=None, index_file=None, force_reindex=False):
     """Initialize the index manager with the given parameters.
     
     Args:
         app: Flask application instance
-        file_service: Optional FileService instance
+        file_records: Optional list of FileRecord objects
         index_file: Optional path to index file
         force_reindex: Whether to force rebuilding the index
     """
     if index_file:
         # Load from flat index file
         index_mgr = IndexManager(index_path=index_file)
-    elif file_service:
+    elif file_records:
         # Build index from files
-        index_mgr = IndexManager(file_svc=file_service)
+        index_mgr = IndexManager(file_records=file_records)
     else:
-        raise ValueError("Either file_service or index_file must be provided")
+        raise ValueError("Either file_records or index_file must be provided")
     
     app.config['SEARCH_SERVICE'] = SearchService(index_mgr)
     return index_mgr

@@ -14,36 +14,7 @@
 // ---------------------------------------------------------------
 
 /* ========================
-   1 ‑ Timing instrumentation
-   ======================== */
-   const timingLogger = {
-    timestamps: {},
-    requestId: '',
-
-    init(requestId = '') {
-        this.requestId = requestId;
-    },
-    start(ev, data = {}) {
-        this.timestamps[ev] = { t0: performance.now(), data };
-    },
-    end(ev, extra = {}) {
-        const rec = this.timestamps[ev];
-        if (!rec) return 0;
-        const dur = performance.now() - rec.t0;
-        delete this.timestamps[ev];
-        const payload = { ...rec.data, ...extra, duration_ms: dur, request_id: this.requestId };
-        console.log(`[TIMING] ${ev} – ${dur.toFixed(1)} ms`, payload);
-        fetch('/api/log-timing', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ event_type: ev, data: payload }), keepalive: true
-        }).catch(() => {});
-        return dur;
-    },
-    log(ev, data = {}) { this.end(ev, data); }
-};
-
-/* ========================
-   2 ‑ Audio single‑instance manager
+   1 ‑ Audio single‑instance manager
    ======================== */
 const audioManager = {
     current: null,
@@ -69,7 +40,7 @@ const audioManager = {
 };
 
 /* ========================
-   3 ‑ Lazy audio loading queue
+   2 ‑ Lazy audio loading queue
    ======================== */
 const audioQueue = {
     q: [], active: 0, max: 3,
@@ -105,8 +76,6 @@ function loadAudio(placeholder) {
     const audioUrl = `/audio/${encodeURIComponent(source)}/${encodeURIComponent(filename)}.${fmt}#t=${start}`;
     const playerId = `audio-${srcId}-${start}`;
 
-    timingLogger.start('audio_loading', { source_id: srcId, start_time: start, end_time: end });
-
     const cont  = document.createElement('div'); 
     cont.className = 'audio-container';
     cont.dataset.playerId = playerId;
@@ -124,13 +93,12 @@ function loadAudio(placeholder) {
     cont.appendChild(audio); 
     placeholder.replaceWith(cont);
 
-    audio.addEventListener('loadedmetadata', () => timingLogger.end('audio_loading'));
     audioManager.register(audio, playerId);
     return audio;
 }
 
 /* ========================
-   4 ‑ Segment fetch helpers
+   3 ‑ Segment fetch helpers
    ======================== */
 const segmentCache = {};   // key = `${epi}|${idx}`
 
@@ -223,7 +191,7 @@ async function fetchSegmentsByIdxBatch(lookups) {
 }
 
 /* ========================
-   5 ‑ Text highlighting utils
+   4 ‑ Text highlighting utils
    ======================== */
 const queryTerm = new URLSearchParams(window.location.search).get('q') || '';
 function highlightQuery(txt, charOffset) {
@@ -240,7 +208,7 @@ function highlightQuery(txt, charOffset) {
 }
 
 /* ========================
-   6 ‑ Build context & navigation
+   5 ‑ Build context & navigation
    ======================== */
 function buildContext(resultItem, seg, segmentMap) {
     let curIdx = seg.segment_index;
@@ -317,13 +285,85 @@ function buildContext(resultItem, seg, segmentMap) {
 }
 
 /* ========================
-   8 ‑ Result‑item click binding
+   6 ‑ Audio helper to seek header player
+   ======================== */
+function playFromSourceAudio(hitIndex, startTime) {
+    // Find the result item that matches this hit index
+    const resultItem = document.querySelector(`.result-item[data-hit-index="${hitIndex}"]`);
+    if (!resultItem) {
+        console.warn(`Could not find result item for hit index: ${hitIndex}`);
+        return;
+    }
+
+    // Get the audio player directly from the result item
+    const audio = resultItem.querySelector('audio');
+    if (!audio) {
+        console.warn(`Could not find audio element in result item`);
+        return;
+    }
+
+    // Stop all other players
+    audioManager.stop();
+    
+    // Set the start time and load the audio
+    audio.currentTime = parseFloat(startTime);
+    audio.preload = 'metadata'; // Start loading after setting the time
+    
+    // Get all segments in the context
+    const contextContainer = resultItem.querySelector('.context-container');
+    if (!contextContainer) {
+        console.warn('Could not find context container');
+        return;
+    }
+
+    // Find the last segment to get its end time
+    const segments = contextContainer.querySelectorAll('.context-segment');
+    const lastSegment = segments[segments.length - 1];
+    const endTime = parseFloat(lastSegment.dataset.end) || 0;
+
+    // Remove highlighting from all segments
+    segments.forEach(seg => seg.classList.remove('playing-segment'));
+    
+    // Add timeupdate listener to stop at end time and update highlighting
+    const timeUpdateHandler = () => {
+        // Find the currently playing segment
+        let currentSegment = null;
+        for (const seg of segments) {
+            const segStart = parseFloat(seg.dataset.start);
+            const segEnd = parseFloat(seg.dataset.end);
+            if (audio.currentTime >= segStart && audio.currentTime < segEnd) {
+                currentSegment = seg;
+                break;
+            }
+        }
+
+        // Update highlighting
+        segments.forEach(seg => seg.classList.remove('playing-segment'));
+        if (currentSegment) {
+            currentSegment.classList.add('playing-segment');
+        }
+
+        // Stop at end time
+        if (audio.currentTime >= endTime) {
+            audio.pause();
+            audio.currentTime = parseFloat(startTime);
+            audio.removeEventListener('timeupdate', timeUpdateHandler);
+            // Remove highlighting when stopped
+            segments.forEach(seg => seg.classList.remove('playing-segment'));
+        }
+    };
+    audio.addEventListener('timeupdate', timeUpdateHandler);
+    
+    // Play the audio
+    audio.play().catch(err => {
+        console.error('Error playing audio:', err);
+    });
+}
+
+/* ========================
+   7 ‑ Result‑item click binding
    ======================== */
 document.addEventListener('DOMContentLoaded', () => {
-    // timing logger init
-    const rq = document.querySelector('meta[name="request-id"]');
-    if (rq) timingLogger.init(rq.content);
-
     // Remove any existing source-level audio players
     document.querySelectorAll('.source-header .audio-container').forEach(container => {
         container.remove();
@@ -457,83 +497,7 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 /* ========================
-   7 ‑ Audio helper to seek header player
-   ======================== */
-function playFromSourceAudio(hitIndex, startTime) {
-    // Find the result item that matches this hit index
-    const resultItem = document.querySelector(`.result-item[data-hit-index="${hitIndex}"]`);
-    if (!resultItem) {
-        console.warn(`Could not find result item for hit index: ${hitIndex}`);
-        return;
-    }
-
-    // Get the audio player directly from the result item
-    const audio = resultItem.querySelector('audio');
-    if (!audio) {
-        console.warn(`Could not find audio element in result item`);
-        return;
-    }
-
-    // Stop all other players
-    audioManager.stop();
-    
-    // Set the start time and load the audio
-    audio.currentTime = parseFloat(startTime);
-    audio.preload = 'metadata'; // Start loading after setting the time
-    
-    // Get all segments in the context
-    const contextContainer = resultItem.querySelector('.context-container');
-    if (!contextContainer) {
-        console.warn('Could not find context container');
-        return;
-    }
-
-    // Find the last segment to get its end time
-    const segments = contextContainer.querySelectorAll('.context-segment');
-    const lastSegment = segments[segments.length - 1];
-    const endTime = parseFloat(lastSegment.dataset.end) || 0;
-
-    // Remove highlighting from all segments
-    segments.forEach(seg => seg.classList.remove('playing-segment'));
-    
-    // Add timeupdate listener to stop at end time and update highlighting
-    const timeUpdateHandler = () => {
-        // Find the currently playing segment
-        let currentSegment = null;
-        for (const seg of segments) {
-            const segStart = parseFloat(seg.dataset.start);
-            const segEnd = parseFloat(seg.dataset.end);
-            if (audio.currentTime >= segStart && audio.currentTime < segEnd) {
-                currentSegment = seg;
-                break;
-            }
-        }
-
-        // Update highlighting
-        segments.forEach(seg => seg.classList.remove('playing-segment'));
-        if (currentSegment) {
-            currentSegment.classList.add('playing-segment');
-        }
-
-        // Stop at end time
-        if (audio.currentTime >= endTime) {
-            audio.pause();
-            audio.currentTime = parseFloat(startTime);
-            audio.removeEventListener('timeupdate', timeUpdateHandler);
-            // Remove highlighting when stopped
-            segments.forEach(seg => seg.classList.remove('playing-segment'));
-        }
-    };
-    audio.addEventListener('timeupdate', timeUpdateHandler);
-    
-    // Play the audio
-    audio.play().catch(err => {
-        console.error('Error playing audio:', err);
-    });
-}
-
-/* ========================
-   9 ‑ Lazy audio via IntersectionObserver
+   8 ‑ Lazy audio via IntersectionObserver
    ======================== */
 function setupLazyLoading() {
     if (!('IntersectionObserver' in window)) {
