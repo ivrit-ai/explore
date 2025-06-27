@@ -1,6 +1,6 @@
 from flask import Blueprint, send_file, current_app, request, Response
-from urllib.parse import unquote
 from ..routes.auth import login_required
+from ..utils import resolve_audio_path
 import os
 import mimetypes
 import re
@@ -97,23 +97,12 @@ def serve_audio(filename):
     request_id = str(uuid.uuid4())[:8]
     start_time = time.time()
     
-    logger.debug(f"[TIMING] [REQ:{request_id}] Audio request received for: {filename}")
+    logger.info(f"[TIMING] [REQ:{request_id}] Audio request received for: {filename}")
     
     try:
-        # Get audio directory from config
-        audio_dir = current_app.config.get('AUDIO_DIR')
-        if not audio_dir:
-            raise ValueError("AUDIO_DIR not configured in application")
-            
-        # Construct the direct path to the audio file
-        audio_path = os.path.join(audio_dir, filename)
-        
-        # If file doesn't exist, try with URL-decoded version
-        if not os.path.exists(audio_path):
-            decoded_name = unquote(filename)
-            audio_path = os.path.join(audio_dir, decoded_name)
-            
-        if not os.path.exists(audio_path):
+        # Resolve the audio file path
+        audio_path = resolve_audio_path(filename)
+        if not audio_path:
             logger.error(f"[TIMING] [REQ:{request_id}] Audio file not found for: {filename}")
             return f"Audio file not found for {filename}", 404
             
@@ -126,23 +115,3 @@ def serve_audio(filename):
         import traceback
         traceback.print_exc()
         return f"Error: {str(e)}", 404
-
-@bp.route('/check-audio/<filename>')
-@login_required
-def check_audio(filename):
-    try:
-        audio_dir = current_app.config.get('AUDIO_DIR')
-        if not audio_dir:
-            return "AUDIO_DIR not configured", 500
-            
-        base_name = filename.rsplit('.', 1)[0]
-        search_pattern = os.path.join(audio_dir, '*', f"{base_name}.opus")
-        matching_files = glob.glob(search_pattern)
-        
-        if matching_files:
-            audio_path = matching_files[0]
-            return f"File exists! Size: {os.path.getsize(audio_path)} bytes"
-            
-        return "File not found!", 404
-    except Exception as e:
-        return f"Error: {str(e)}", 500 

@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 from app import create_app
-from app.services.file_service import FileService
+from app.utils import get_transcripts
 from app.services.index import IndexManager
 from app.services.search import SearchService
 
@@ -79,34 +79,18 @@ def init_app(data_dir: str):
     app = create_app(data_dir=data_dir)
     return app
 
-@timeit("FileService scan")
+@timeit("Transcript scan")
 def init_file_service(json_dir: Path, audio_dir: Path):
-    fs = FileService(transcripts_dir=json_dir)
-
-    # build the mapping once at start-up
-    available = {
-        rec.id: {
-            "audio_path":  str(audio_dir / f"{rec.id}.opus"),
-            "audio_format": "opus"
-        }
-        for rec in fs.records()
-        if (audio_dir / f"{rec.id}.opus").exists()
-    }
-
-    # attach a class-level helper so templates keep working
-    if not hasattr(FileService, "get_available_files"):
-        def _get_available_files(self):      # self is ignored, mapping is closed over
-            return available
-        setattr(FileService, "get_available_files", _get_available_files)
-
-    log.info(f"{len(available)} recordings discovered")
-    return fs
+    file_records = get_transcripts(json_dir)
+    
+    log.info(f"Found {len(file_records)} transcript files")
+    return file_records
 
 @timeit("Index build")
-def build_index(fs: FileService, force: bool, index_file: str | None = None):
+def build_index(file_records, force: bool, index_file: str | None = None):
     if force:
         log.info("--force-reindex supplied; building fresh index …")
-    return IndexManager(fs, index_file=index_file)
+    return IndexManager(file_records, index_file=index_file)
 
 # ---------------------------------------------------------------------------
 # 5. Wire everything up
@@ -122,21 +106,22 @@ if not json_dir.is_dir():
 
 app = init_app(str(data_root))
 with app.app_context():
-    file_service = init_file_service(json_dir, audio_dir)
+    file_records = init_file_service(json_dir, audio_dir)
+    print(file_records)
     from app import init_index_manager
     index_manager = init_index_manager(
         app,
-        file_service=file_service,
+        file_records=file_records,
         index_file=args.index_file,
         force_reindex=args.force_reindex
     )
 
     # expose to blueprints
-    app.config["FILE_SERVICE"] = file_service
+    app.config["FILE_RECORDS"] = file_records
 
     # make main blueprint globals match
     from app.routes import main as main_bp
-    main_bp.file_service = file_service
+    main_bp.file_records = file_records
     main_bp.search_service = app.config["SEARCH_SERVICE"]
     
 

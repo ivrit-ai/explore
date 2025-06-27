@@ -1,6 +1,5 @@
 from flask import Blueprint, render_template, request, jsonify, current_app
 from ..services.search import SearchService
-from ..services.file_service import FileService
 from ..services.analytics_service import track_performance
 from ..routes.auth import login_required
 import time
@@ -15,7 +14,7 @@ bp = Blueprint('main', __name__)
 
 # Global search service instance for persistence
 search_service = None
-file_service = None
+file_records = None
 
 @bp.route('/')
 @login_required
@@ -35,11 +34,13 @@ def search():
     page       = max(1, int(request.args.get('page', 1)))
     start_time = time.time()
 
-    global search_service, file_service
-    if file_service is None:
-        file_service = FileService(current_app)
+    global search_service, file_records
+    if file_records is None:
+        from ..utils import get_transcripts
+        json_dir = current_app.config.get('DATA_DIR') / "json"
+        file_records = get_transcripts(json_dir)
     if search_service is None:
-        search_service = SearchService(IndexManager(file_service))
+        search_service = SearchService(IndexManager(file_records))
 
     hits = search_service.search(query)
     total = len(hits)
@@ -56,8 +57,8 @@ def search():
         records.append({
             "episode_idx":  h.episode_idx,
             "char_offset":  h.char_offset,
-            "recording_id": search_service._index_mgr.get().ids[h.episode_idx],
-            "source":       search_service._index_mgr.get().ids[h.episode_idx],
+            "recording_id": search_service._index_mgr.get().get_source_by_episode_idx(h.episode_idx),
+            "source":       search_service._index_mgr.get().get_source_by_episode_idx(h.episode_idx),
             "segment_idx":  seg.seg_idx,
             "start_sec":    seg.start_sec,
             "end_sec":      seg.end_sec,

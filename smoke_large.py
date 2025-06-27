@@ -22,7 +22,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Iterable
 
-from app.services.file_service import FileService
+from app.utils import get_transcripts
 from app.services.index import IndexManager
 from app.services.search import SearchService, SearchHit
 
@@ -50,7 +50,7 @@ def harvest_random_words(index_texts: Iterable[str], k: int) -> list[str]:
 
 
 def preview_hit(idx_mgr, hit: SearchHit, span=50) -> str:
-    txt = idx_mgr.get().text[hit.episode_idx]
+    txt = idx_mgr.get().get_text_by_episode_idx(hit.episode_idx)
     start = max(0, hit.char_offset - 10)
     return txt[start : hit.char_offset + span]
 
@@ -65,10 +65,10 @@ def assert_segment_contains(svc: SearchService, hit: SearchHit, needle: str):
 # ---------- main ----------------------------------------------------------- #
 def main() -> None:
     print("🔧  Building index …")
-    fs   = FileService(JSON_DIR)
-    _, build_sec = time_call(IndexManager, fs)
+    file_records = get_transcripts(JSON_DIR)
+    _, build_sec = time_call(IndexManager, file_records)
     idxm = _
-    epi_cnt = len(idxm.get().ids)
+    epi_cnt = idxm.get().get_document_count()
     print(f"✅  {epi_cnt:,} episodes indexed in {build_sec:.1f} s")
 
     svc = SearchService(idxm)
@@ -91,14 +91,17 @@ def main() -> None:
         if hits:
             hit = random.choice(hits)
             # for regex, use the *matched* text as needle
-            m = re.search(q, idxm.get().text[hit.episode_idx][hit.char_offset:])
+            m = re.search(q, idxm.get().get_text_by_episode_idx(hit.episode_idx)[hit.char_offset:])
             needle = m.group(0) if m else q
             seg = assert_segment_contains(svc, hit, needle)
             print("  ↳", preview_hit(idxm, hit), f"(seg start={seg.start_sec:.2f}s)")
 
     # --------------------------------------------------------------------- #
     print(f"\n=== Batch test on {BATCH_SIZE} random words ===")
-    rnd_words = harvest_random_words(idxm.get().text, BATCH_SIZE)
+    # Get all document texts for word harvesting
+    idx = idxm.get()
+    all_texts = [idx.get_text_by_episode_idx(i) for i in range(epi_cnt)]
+    rnd_words = harvest_random_words(all_texts, BATCH_SIZE)
     failures = seg_fail = 0
     total_sec = 0.0
     segchk_hits: list[SearchHit] = []
@@ -113,7 +116,7 @@ def main() -> None:
 
     # segment-level assertions for 20 random hits
     for hit in segchk_hits:
-        needle = idxm.get().text[hit.episode_idx][hit.char_offset:
+        needle = idx.get_text_by_episode_idx(hit.episode_idx)[hit.char_offset:
                                                   hit.char_offset + len(rnd_words[0])]
         try:
             assert_segment_contains(svc, hit, needle.strip())

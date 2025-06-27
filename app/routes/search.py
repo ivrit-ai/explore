@@ -4,7 +4,6 @@ from flask import Blueprint, request, jsonify, current_app, abort
 
 from app.services.search import SearchService, SearchHit
 from app.services.index import IndexManager, segment_by_idx
-from app.services.file_service import FileService
 
 bp = Blueprint("search", __name__, url_prefix="/search")
 
@@ -19,23 +18,6 @@ def search():
     regex = bool(request.args.get("regex"))
     hits = search_svc.search(q, regex=regex)
     return jsonify([hit.__dict__ for hit in hits])
-
-@bp.route("/snippet", methods=["GET"])
-def snippet():
-    search_svc = current_app.config["SEARCH_SERVICE"]
-    index_mgr = search_svc._index_mgr
-    
-    try:
-        epi = int(request.args["episode_idx"])
-        off = int(request.args["offset"])
-        size = int(request.args.get("size", 60))
-    except (KeyError, ValueError):
-        abort(400, "episode_idx, offset (int) required")
-    idx = index_mgr.get()
-    if epi >= len(idx.text):
-        abort(404)
-    txt = idx.text[epi]
-    return jsonify({"text": txt[max(0, off - 10): off + size]})
 
 @bp.route("/segment", methods=["POST"])
 def get_segment():
@@ -80,22 +62,34 @@ def get_segments_by_idx():
         if not isinstance(lookups, list):
             abort(400, "lookups must be an array")
         
-        results = []
+        # Prepare batch lookup
+        batch_lookups = []
+        valid_lookups = []
+        
         for lookup in lookups:
             try:
                 epi = int(lookup["episode_idx"])
                 idx = int(lookup["segment_idx"])
-                seg = segment_by_idx(index_mgr, epi, idx)
-                results.append({
-                    "episode_idx": epi,
-                    "segment_index": seg.seg_idx,
-                    "start_sec": seg.start_sec,
-                    "end_sec": seg.end_sec,
-                    "text": seg.text
-                })
-            except (KeyError, ValueError, IndexError) as e:
+                doc_id = epi
+                batch_lookups.append((doc_id, idx))
+                valid_lookups.append((epi, idx))
+            except (KeyError, ValueError) as e:
                 # Skip invalid lookups but continue processing others
                 continue
+        
+        # Perform batch lookup
+        segments = index_mgr.get_segments_by_ids(batch_lookups)
+        
+        # Map results back to original format
+        results = []
+        for (epi, idx), segment_data in zip(valid_lookups, segments):
+            results.append({
+                "episode_idx": epi,
+                "segment_index": segment_data["segment_id"],
+                "start_sec": segment_data["start_time"],
+                "end_sec": segment_data["end_time"],
+                "text": segment_data["text"]
+            })
         
         return jsonify(results)
             

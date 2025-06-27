@@ -79,7 +79,7 @@
       {# Direct audio container instead of placeholder #}
       <div class="audio-container source-audio-container"
            data-source="{{ source|urlencode }}"
-           data-format="{{ available_files[source].audio_format if source in available_files else '' }}"
+           data-format="opus"
            data-start="{{ source_results[0].start_sec if source_results else 0 }}"
            data-end="{{ source_results[-1].end_sec if source_results else 0 }}">
       </div>

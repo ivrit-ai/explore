@@ -2,7 +2,7 @@
 import os
 import sys
 import argparse
-from run import app, initialize_app, initialize_file_service, initialize_search_index
+from app import create_app
 
 # When run directly, parse command line arguments
 if __name__ == '__main__':
@@ -10,6 +10,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Run the ivrit.ai Explore application')
     parser.add_argument('--data-dir', type=str, help='Path to the data directory', default='/root/data')
     args = parser.parse_args()
+    
+    # Create app with data directory
+    app = create_app(data_dir=os.path.abspath(args.data_dir))
     
     # Run the Flask development server
     app.run(host='0.0.0.0')

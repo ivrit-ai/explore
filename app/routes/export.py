@@ -2,14 +2,13 @@ from flask import Blueprint, request, send_file, current_app, jsonify
 import io
 import csv
 import subprocess
-from ..services.file_service import FileService
 from ..services.search import SearchService
 from ..services.analytics_service import track_performance
+from ..utils import resolve_audio_path
 import logging
 import time
 import os
 import glob
-from urllib.parse import unquote
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +36,7 @@ def export_results_csv(query):
         all_results.append({
             "episode_idx": hit.episode_idx,
             "char_offset": hit.char_offset,
-            "source": search_service._index_mgr.get().ids[hit.episode_idx],
+            "source": search_service._index_mgr.get().get_source_by_episode_idx(hit.episode_idx),
             "segment_idx": seg.seg_idx,
             "start": seg.start_sec,
             "end": seg.end_sec,
@@ -73,23 +72,6 @@ def export_results_csv(query):
         download_name=f'search_results_{query}.csv'
     )
 
-@bp.route('/export/source/<source>')
-def export_source_files(source):
-    file_service = FileService(current_app)
-    available_files = file_service.get_available_files()
-    
-    if source not in available_files:
-        return "Source not found", 404
-        
-    file_info = available_files[source]
-    
-    return send_file(
-        file_info['audio_path'],
-        mimetype=f'audio/{file_info["audio_format"]}',
-        as_attachment=True,
-        download_name=f'{source}.{file_info["audio_format"]}'
-    )
-
 @bp.route('/export/segment/<source>/<path:filename>')
 def export_segment(source, filename):
     start_time = float(request.args.get('start', 0))
@@ -99,20 +81,10 @@ def export_segment(source, filename):
         return "End time must be greater than start time", 400
     
     try:
-        # Get audio directory from config
-        audio_dir = current_app.config.get('AUDIO_DIR')
-        if not audio_dir:
-            raise ValueError("AUDIO_DIR not configured in application")
-            
-        # Construct the direct path to the audio file
-        audio_path = os.path.join(audio_dir, source, f'{filename}.opus')
-        
-        # If file doesn't exist, try with URL-decoded version
-        if not os.path.exists(audio_path):
-            decoded_name = unquote(filename)
-            audio_path = os.path.join(audio_dir, source, f'{decoded_name}.opus')
-            
-        if not os.path.exists(audio_path):
+        # Resolve the audio file path
+        logger.info(f"Exporting segment: {source}/{filename}")
+        audio_path = resolve_audio_path(f'{source}/{filename}.opus')
+        if not audio_path:
             return "Source not found", 404
         
         # Create a temporary buffer for the output

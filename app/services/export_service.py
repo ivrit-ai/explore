@@ -1,10 +1,12 @@
 import io
 import csv
+import os
 from pydub import AudioSegment
+from ..utils import resolve_audio_path
 
 class ExportService:
-    def __init__(self, file_service):
-        self.file_service = file_service
+    def __init__(self, audio_dir=None):
+        self.audio_dir = audio_dir
 
     def export_results_csv(self, results):
         """Export search results to CSV"""
@@ -25,18 +27,20 @@ class ExportService:
         output.seek(0)
         return output.getvalue()
 
-    def export_audio_segment(self, source, start_time, duration=10):
+    def export_audio_segment(self, source, start_time, duration=10, audio_dir=None):
         """Export a segment of an audio file"""
-        available_files = self.file_service.get_available_files()
-        if source not in available_files:
-            raise ValueError(f"Source not found: {source}")
+        # Use provided audio_dir or fall back to instance audio_dir
+        audio_dir = audio_dir or self.audio_dir
+        if not audio_dir:
+            raise ValueError("Audio directory not provided")
             
-        file_info = available_files[source]
-        audio_path = file_info['audio_path']
-        audio_format = file_info['audio_format']
+        # Resolve the audio file path
+        audio_path = resolve_audio_path(source)
+        if not audio_path:
+            raise ValueError(f"Audio file not found for source: {source}")
         
         # Load the audio file
-        audio = AudioSegment.from_file(audio_path, format=audio_format)
+        audio = AudioSegment.from_file(audio_path, format="opus")
         
         # Convert times to milliseconds
         start_ms = int(start_time * 1000)
@@ -55,7 +59,7 @@ class ExportService:
         
         # Export to buffer
         buffer = io.BytesIO()
-        segment.export(buffer, format=audio_format)
+        segment.export(buffer, format="opus")
         buffer.seek(0)
         
-        return buffer, audio_format 
+        return buffer, "opus" 
