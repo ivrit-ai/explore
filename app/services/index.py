@@ -319,8 +319,6 @@ class IndexManager:
         
         # For SQLite, we can copy the file directly
         if self._db_type == "sqlite":
-            print(path)
-            print(self._db_kwargs)
             import shutil
             if "path" in self._db_kwargs and self._db_kwargs["path"] != ":memory:":
                 shutil.copy2(self._db_kwargs["path"], path)
@@ -375,7 +373,7 @@ class IndexManager:
         print(self._file_records)
         for f in self._file_records:
             print(f.id)
-        records = list(enumerate(self._file_records))[0:100]
+        records = list(enumerate(self._file_records))
         total_files = len(records)
         
         # Create database service
