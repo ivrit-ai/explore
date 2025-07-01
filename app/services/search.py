@@ -31,7 +31,6 @@ class SearchService:
         # Log search parameters
         logger.info(f"Starting search for query: '{query}'")
 
-        # Use DuckDB-based search
         hits_data = idx.search_hits(query)
         hits = [SearchHit(episode_idx, char_offset) for episode_idx, char_offset in hits_data]
                     

@@ -40,7 +40,10 @@ def search():
         json_dir = current_app.config.get('DATA_DIR') / "json"
         file_records = get_transcripts(json_dir)
     if search_service is None:
-        search_service = SearchService(IndexManager(file_records))
+        # Get database type from environment
+        db_type = os.environ.get('DEFAULT_DB_TYPE', 'sqlite')
+        
+        search_service = SearchService(IndexManager(file_records, db_type=db_type))
 
     hits = search_service.search(query)
     total = len(hits)

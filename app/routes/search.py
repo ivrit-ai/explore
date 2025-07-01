@@ -3,7 +3,7 @@ from __future__ import annotations
 from flask import Blueprint, request, jsonify, current_app, abort
 
 from app.services.search import SearchService, SearchHit
-from app.services.index import IndexManager, segment_by_idx
+from app.services.index import IndexManager
 
 bp = Blueprint("search", __name__, url_prefix="/search")
 
