@@ -264,9 +264,6 @@ class IndexManager:
 
     def _build(self) -> TranscriptIndex:
         log = logging.getLogger("index")
-        print(self._file_records)
-        for f in self._file_records:
-            print(f.id)
         records = list(enumerate(self._file_records))
         total_files = len(records)
         
