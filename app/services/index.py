@@ -1,16 +1,11 @@
-from __future__ import annotations
 from pathlib import Path
 import time
 import logging
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from typing import List, Tuple, Optional
-from bisect import bisect_right
 from concurrent.futures import ThreadPoolExecutor
 import os
-import gzip
-import orjson
 from tqdm.auto import tqdm
-import itertools
 
 from ..utils import FileRecord
 from .db import DatabaseService
@@ -20,13 +15,7 @@ from .db import DatabaseService
 class TranscriptIndex:
     """Database-agnostic transcript index with useful query methods."""
     _db: DatabaseService
-    
-    def get_document_count(self) -> int:
-        """Get the total number of documents in the index."""
-        cursor = self._db.execute("SELECT COUNT(*) FROM documents")
-        result = cursor.fetchone()
-        return result[0]
-    
+        
     def get_document_stats(self) -> tuple[int, int]:
         """Get document count and total character count in a single query."""
         cursor = self._db.execute("""
@@ -35,56 +24,7 @@ class TranscriptIndex:
         """)
         result = cursor.fetchone()
         return (result[0], result[1])
-    
-    def get_document_text(self, doc_id: int) -> str:
-        """Get the full text of a document by its ID."""
-        cursor = self._db.execute(
-            "SELECT full_text FROM documents WHERE doc_id = ?", 
-            [doc_id]
-        )
-        result = cursor.fetchone()
-        if not result:
-            raise IndexError(f"Document {doc_id} not found")
-        return result[0]
-    
-    def get_document_info(self, doc_id: int) -> dict:
-        """Get document information including source, episode, and text."""
-        cursor = self._db.execute(
-            "SELECT doc_id, source, episode, full_text FROM documents WHERE doc_id = ?", 
-            [doc_id]
-        )
-        result = cursor.fetchone()
-        if not result:
-            raise IndexError(f"Document {doc_id} not found")
-        return {
-            "doc_id": result[0],
-            "source": result[1],
-            "episode": result[2],
-            "full_text": result[3]
-        }
-    
-    def get_segments_for_document(self, doc_id: int) -> list[dict]:
-        """Get all segments for a document."""
-        cursor = self._db.execute("""
-            SELECT segment_id, segment_text, avg_logprob, char_offset, start_time, end_time
-            FROM segments 
-            WHERE doc_id = ? 
-            ORDER BY segment_id
-        """, [doc_id])
-        
-        result = cursor.fetchall()
-        return [
-            {
-                "segment_id": row[0],
-                "text": row[1],
-                "avg_logprob": row[2],
-                "char_offset": row[3],
-                "start_time": row[4],
-                "end_time": row[5]
-            }
-            for row in result
-        ]
-    
+               
     def get_segments_by_ids(self, lookups: list[tuple[int, int]]) -> list[dict]:
         """Get multiple segments by (doc_id, segment_id) pairs."""
         if not lookups:
@@ -152,17 +92,7 @@ class TranscriptIndex:
             "start_time": result[4],
             "end_time": result[5]
         }
-            
-    def get_document_by_episode_idx(self, episode_idx: int) -> dict:
-        """Get document by episode index (0-based)."""
-        doc_id = episode_idx
-        return self.get_document_info(doc_id)
-    
-    def get_text_by_episode_idx(self, episode_idx: int) -> str:
-        """Get document text by episode index (0-based)."""
-        doc_id = episode_idx
-        return self.get_document_text(doc_id)
-    
+        
     def get_source_by_episode_idx(self, episode_idx: int) -> str:
         """Get document source by episode index (0-based)."""
         doc_id = episode_idx
@@ -177,12 +107,7 @@ class TranscriptIndex:
 
     def search_hits(self, query: str) -> list[tuple[int, int]]:
         """Search for query and return (episode_idx, char_offset) pairs for hits."""
-        if self._db.db_type == "sqlite":
-            return self._search_sqlite_simple(query)
-        elif self._db.db_type == "postgresql":
-            return self._search_postgresql_simple(query)
-        else:
-            raise ValueError(f"Unsupported database type: {self._db.db_type}")
+        return self._search_sqlite_simple(query)
     
     def _search_sqlite_simple(self, query: str) -> list[tuple[int, int]]:
         """Search using SQLite UDF for pattern matching."""
@@ -209,41 +134,14 @@ class TranscriptIndex:
                 hits.extend([(doc_id, offset) for offset in offsets])
         
         return hits
-    
-    def _search_postgresql_simple(self, query: str) -> list[tuple[int, int]]:
-        """Search using PostgreSQL function for pattern matching."""
-
-        log = logging.getLogger("index")
-        log.info(f"Searching for query: {query}")
-
-        cursor = self._db.execute("""
-            SELECT doc_id, match_offsets(full_text, %s) as offsets
-            FROM documents 
-            WHERE full_text ILIKE %s
-        """, [query, f'%{query}%'])
-        
-        result = cursor.fetchall()
-        hits = []
-        
-        for row in result:
-            doc_id = row[0]
-            offsets_str = row[1]
-            if offsets_str:
-                # Split the comma-separated offsets and convert to integers
-                offsets = [int(offset) for offset in offsets_str.split(',')]
-                # Add (doc_id, offset) pairs to hits
-                hits.extend([(doc_id, offset) for offset in offsets])
-        
-        return hits
 
 
 def _setup_schema(db: DatabaseService):
     """Create the transcript database schema."""
     # Apply SQLite performance optimizations
-    if db.db_type == "sqlite":
-        db.execute("PRAGMA journal_mode = WAL")
-        db.execute("PRAGMA synchronous = NORMAL")
-        db.execute("PRAGMA cache_size = 1000000")
+    db.execute("PRAGMA journal_mode = WAL")
+    db.execute("PRAGMA synchronous = NORMAL")
+    db.execute("PRAGMA cache_size = 1000000")
     
     # Create documents table
     db.execute("""
@@ -294,10 +192,9 @@ def _setup_schema(db: DatabaseService):
 # ­­­­­­­­­­­­­­­­­­­­­­­­­­­­-------------------------------------------------- #
 class IndexManager:
     """Global, read-only index using database-agnostic service."""
-    def __init__(self, file_records: Optional[List[FileRecord]] = None, index_path: Optional[Path] = None, db_type: str = "sqlite", **db_kwargs) -> None:
+    def __init__(self, file_records: Optional[List[FileRecord]] = None, index_path: Optional[Path] = None, **db_kwargs) -> None:
         self._file_records = file_records
         self._index_path = Path(index_path) if index_path else None
-        self._db_type = db_type
         self._db_kwargs = db_kwargs
         self._index = None
         
@@ -314,18 +211,15 @@ class IndexManager:
     def save_index(self, path: str | Path) -> None:
         """Save the index to a database file."""
         path = Path(path)
-        if self._db_type == "sqlite" and path.suffix != '.db':
+        if path.suffix != '.db':
             path = path.with_suffix('.db')
         
         # For SQLite, we can copy the file directly
-        if self._db_type == "sqlite":
-            import shutil
-            if "path" in self._db_kwargs and self._db_kwargs["path"] != ":memory:":
-                shutil.copy2(self._db_kwargs["path"], path)
-            else:
-                raise NotImplementedError("Cannot save in-memory SQLite database")
+        import shutil
+        if "path" in self._db_kwargs and self._db_kwargs["path"] != ":memory:":
+            shutil.copy2(self._db_kwargs["path"], path)
         else:
-            raise NotImplementedError(f"Save not implemented for {self._db_type}")
+            raise NotImplementedError("Cannot save in-memory SQLite database")
 
     def _load_index(self) -> TranscriptIndex:
         """Load index from a database file."""
@@ -336,19 +230,19 @@ class IndexManager:
         
         # Load from single file
         db_path = self._index_path
-        if self._db_type == "sqlite" and db_path.suffix != '.db':
+        if db_path.suffix != '.db':
             db_path = db_path.with_suffix('.db')
         
-        db = DatabaseService(
-            db_type=self._db_type,
-            **self._db_kwargs
-        )
+        # Create database kwargs with the correct path
+        db_kwargs = self._db_kwargs.copy()
+        db_kwargs['path'] = str(db_path)
+        
+        db = DatabaseService(**db_kwargs)
 
         # Apply SQLite performance optimizations for existing databases
-        if self._db_type == "sqlite":
-            db.execute("PRAGMA journal_mode = WAL")
-            db.execute("PRAGMA synchronous = NORMAL")
-            db.execute("PRAGMA cache_size = 1000000")
+        db.execute("PRAGMA journal_mode = WAL")
+        db.execute("PRAGMA synchronous = NORMAL")
+        db.execute("PRAGMA cache_size = 1000000")
 
         return TranscriptIndex(db)
 
@@ -377,7 +271,7 @@ class IndexManager:
         total_files = len(records)
         
         # Create database service
-        db = DatabaseService(db_type=self._db_type, for_index_generation=True, **self._db_kwargs)
+        db = DatabaseService(for_index_generation=True, **self._db_kwargs)
         
         # Setup schema
         log.info("Setting up schema...")

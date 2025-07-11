@@ -51,7 +51,7 @@ def create_app(data_dir: str, index_file: str = None):
         
     return app
 
-def init_index_manager(app, file_records=None, index_file=None, force_reindex=False, db_type=None, **db_kwargs):
+def init_index_manager(app, file_records=None, index_file=None, force_reindex=False, **db_kwargs):
     """Initialize the index manager with the given parameters.
     
     Args:
@@ -59,34 +59,20 @@ def init_index_manager(app, file_records=None, index_file=None, force_reindex=Fa
         file_records: Optional list of FileRecord objects
         index_file: Optional path to index file
         force_reindex: Whether to force rebuilding the index
-        db_type: Database type ("postgresql", "sqlite")
         **db_kwargs: Database-specific connection parameters
     """
-    # Get database configuration from environment or use defaults
-    if db_type is None:
-        db_type = os.environ.get('DEFAULT_DB_TYPE', 'sqlite')
-    
     # Set default database parameters if not provided
     if not db_kwargs:
-        if db_type == "postgresql":
-            db_kwargs = {
-                "host": os.environ.get('POSTGRES_HOST', 'localhost'),
-                "port": int(os.environ.get('POSTGRES_PORT', 5432)),
-                "database": os.environ.get('POSTGRES_DB', 'transcripts'),
-                "user": os.environ.get('POSTGRES_USER', 'postgres'),
-                "password": os.environ.get('POSTGRES_PASSWORD', '')
-            }
-        elif db_type == "sqlite":
-            db_kwargs = {
-                "path": os.environ.get('SQLITE_PATH', 'explore.sqlite')
-            }
+        db_kwargs = {
+            "path": os.environ.get('SQLITE_PATH', 'explore.sqlite')
+        }
     
     if index_file:
         # Load from flat index file
-        index_mgr = IndexManager(index_path=index_file, db_type=db_type, **db_kwargs)
+        index_mgr = IndexManager(index_path=index_file, **db_kwargs)
     elif file_records:
         # Build index from files
-        index_mgr = IndexManager(file_records=file_records, db_type=db_type, **db_kwargs)
+        index_mgr = IndexManager(file_records=file_records, **db_kwargs)
     else:
         raise ValueError("Either file_records or index_file must be provided")
     
