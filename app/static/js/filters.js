@@ -28,9 +28,9 @@ function getUrlParams() {
 /* ========================
    Fetch Metadata from API
    ======================== */
-async function fetchMetadata(query) {
+async function fetchMetadata(query, searchMode) {
     try {
-        const response = await fetch(`/search/metadata?q=${encodeURIComponent(query)}`);
+        const response = await fetch(`/search/metadata?q=${encodeURIComponent(query)}&search_mode=${encodeURIComponent(searchMode)}`);
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
@@ -54,7 +54,7 @@ async function initializeFilters() {
     }
 
     // Fetch full metadata from API (for populating source checkboxes)
-    const metadata = await fetchMetadata(params.query);
+    const metadata = await fetchMetadata(params.query, params.searchMode);
 
     if (metadata && metadata.sources && metadata.date_range) {
         filterState.fullMetadata = metadata;

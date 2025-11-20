@@ -146,10 +146,16 @@ def search():
 def search_metadata():
     """Return metadata (sources and date range) for all search results."""
     query = request.args.get('q', '').strip()
-    
+
     if not query:
         return jsonify({"error": "Missing query parameter 'q'"}), 400
-    
+
+    # Get search mode parameter
+    search_mode = request.args.get('search_mode', 'partial').strip()
+    # Validate search mode
+    if search_mode not in ['exact', 'partial', 'regex']:
+        search_mode = 'partial'
+
     global search_service, file_records
     if file_records is None:
         from ..utils import get_transcripts
@@ -158,11 +164,11 @@ def search_metadata():
     if search_service is None:
         # Get database type from environment
         db_type = os.environ.get('DEFAULT_DB_TYPE', 'sqlite')
-        
+
         search_service = SearchService(IndexManager(file_records, db_type=db_type))
-    
-    # Get ALL hits (not paginated)
-    hits = search_service.search(query)
+
+    # Get ALL hits (not paginated) using the specified search mode
+    hits = search_service.search(query, search_mode=search_mode)
     
     # Extract metadata from all hits
     sources = defaultdict(int)  # source -> count

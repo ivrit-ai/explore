@@ -122,7 +122,8 @@
   <div class="results-main">
     <div class="export-controls">
       <button id="filter-panel-open" class="btn btn-filter-toggle">סינון תוצאות</button>
-      <a href="{{ url_for('export.export_results_csv', query=query) }}"
+      <a href="{{ url_for('export.export_results_csv', q=query, search_mode=search_mode,
+                          date_from=date_from, date_to=date_to, sources=sources_param) }}"
          class="btn btn-primary">ייצא את כל התוצאות ל-CSV</a>
     </div>
 
