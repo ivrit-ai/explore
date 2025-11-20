@@ -549,12 +549,38 @@ audio {
 }
 
 .filter-section h3 {
-    margin: 0 0 1rem 0;
+    margin: 0;
     font-size: 0.95rem;
     font-weight: 600;
     color: #4a5568;
     text-transform: uppercase;
     letter-spacing: 0.5px;
+}
+
+.filter-section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
+.btn-toggle-all {
+    background-color: #edf2f7;
+    color: #4a5568;
+    border: 1px solid #e2e8f0;
+    border-radius: 4px;
+    padding: 0.4rem 0.75rem;
+    font-size: 0.85rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+}
+
+.btn-toggle-all:hover {
+    background-color: #e2e8f0;
+    color: #2d3748;
+    border-color: #cbd5e0;
 }
 
 /* Date Inputs */
@@ -660,6 +686,29 @@ audio {
     font-weight: 600;
 }
 
+/* Apply Filters Button */
+.btn-apply-filters {
+    width: 100%;
+    background-color: #4299e1;
+    color: white;
+    padding: 0.75rem;
+    border: none;
+    border-radius: 6px;
+    font-size: 0.95rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    margin-bottom: 1rem;
+}
+
+.btn-apply-filters:hover {
+    background-color: #3182ce;
+}
+
+.btn-apply-filters:active {
+    background-color: #2c5282;
+}
+
 /* Clear Filters Button */
 .btn-clear-filters {
     width: 100%;
@@ -711,26 +760,6 @@ audio {
     color: #2d3748;
 }
 
-/* Filtered State */
-.source-group.filtered {
-    display: none !important;
-}
-
-/* Filtered Empty State */
-.filtered-empty-state {
-    text-align: center;
-    padding: 3rem 2rem;
-    background: white;
-    border-radius: 12px;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-    margin-top: 2rem;
-}
-
-.filtered-empty-state p {
-    font-size: 1.1rem;
-    color: #718096;
-    margin-bottom: 1.5rem;
-}
 
 /* Responsive Design */
 @media (max-width: 768px) {

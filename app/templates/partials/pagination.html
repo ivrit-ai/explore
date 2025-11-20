@@ -9,8 +9,9 @@
     {# ← previous #}
     {% if pagination.has_prev %}
       <a href="{{ url_for('main.search',
-                          q=query, regex=regex, max_results_per_page=max_results_per_page,
-                          page=pagination.page - 1) }}"
+                          q=query, max_results_per_page=max_results_per_page,
+                          page=pagination.page - 1,
+                          date_from=date_from, date_to=date_to, sources=sources_param) }}"
          class="pagination-btn">← הקודם</a>
     {% else %}
       <span class="pagination-btn disabled">← הקודם</span>
@@ -23,8 +24,9 @@
 
     {% if start_page > 1 %}
       <a href="{{ url_for('main.search',
-                          q=query, regex=regex, max_results_per_page=max_results_per_page,
-                          page=1) }}"
+                          q=query, max_results_per_page=max_results_per_page,
+                          page=1,
+                          date_from=date_from, date_to=date_to, sources=sources_param) }}"
          class="pagination-btn">1</a>
       {% if start_page > 2 %}<span class="pagination-ellipsis">…</span>{% endif %}
     {% endif %}
@@ -34,8 +36,9 @@
         <span class="pagination-btn active">{{ p }}</span>
       {% else %}
         <a href="{{ url_for('main.search',
-                            q=query, regex=regex, max_results_per_page=max_results_per_page,
-                            page=p) }}"
+                            q=query, max_results_per_page=max_results_per_page,
+                            page=p,
+                            date_from=date_from, date_to=date_to, sources=sources_param) }}"
            class="pagination-btn">{{ p }}</a>
       {% endif %}
     {% endfor %}
@@ -45,16 +48,18 @@
         <span class="pagination-ellipsis">…</span>
       {% endif %}
       <a href="{{ url_for('main.search',
-                          q=query, regex=regex, max_results_per_page=max_results_per_page,
-                          page=pagination.total_pages) }}"
+                          q=query, max_results_per_page=max_results_per_page,
+                          page=pagination.total_pages,
+                          date_from=date_from, date_to=date_to, sources=sources_param) }}"
          class="pagination-btn">{{ pagination.total_pages }}</a>
     {% endif %}
 
     {# next → #}
     {% if pagination.has_next %}
       <a href="{{ url_for('main.search',
-                          q=query, regex=regex, max_results_per_page=max_results_per_page,
-                          page=pagination.page + 1) }}"
+                          q=query, max_results_per_page=max_results_per_page,
+                          page=pagination.page + 1,
+                          date_from=date_from, date_to=date_to, sources=sources_param) }}"
          class="pagination-btn">הבא →</a>
     {% else %}
       <span class="pagination-btn disabled">הבא →</span>

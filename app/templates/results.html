@@ -39,7 +39,7 @@
 {# ―― general stats ―― #}
 <div class="stats">
   {% if pagination.total_results > 0 %}
-    <span id="filtered-stats">מציג {{ pagination.total_results }} תוצאות</span>
+    <span>נמצאו {{ pagination.total_results }} תוצאות</span>
   {% else %}
     לא נמצאו תוצאות
   {% endif %}
@@ -79,11 +79,17 @@
 
       {# Source Filter #}
       <div class="filter-section">
-        <h3>מקורות</h3>
+        <div class="filter-section-header">
+          <h3>מקורות</h3>
+          <button id="toggle-all-sources" class="btn-toggle-all" type="button">בטל הכל</button>
+        </div>
         <div id="filter-sources" class="filter-sources-list">
           <div class="filter-loading">טוען מקורות...</div>
         </div>
       </div>
+
+      {# Apply Filters Button #}
+      <button id="apply-filters-btn" class="btn btn-apply-filters" type="button">החל סינון</button>
 
       {# Active Filters Indicator #}
       <div id="active-filters-indicator" class="active-filters-indicator" style="display: none;">
@@ -165,12 +171,6 @@
   </div>      {# /.source-group #}
   {% endfor %}
     </div>          {# /.results #}
-
-    {# Empty state when filters hide all results #}
-    <div id="filtered-empty-state" class="filtered-empty-state" style="display: none;">
-      <p>לא נמצאו תוצאות התואמות למסננים שנבחרו</p>
-      <button onclick="clearFilters()" class="btn btn-primary">נקה מסננים</button>
-    </div>
   </div>  {# /.results-main #}
 </div>  {# /.results-container #}
 
@@ -190,8 +190,6 @@
 <script src="{{ url_for('static', filename='js/results.js') }}"></script>
 <script src="{{ url_for('static', filename='js/filters.js') }}"></script>
 <script>
-// Pass total results to JavaScript
-window.PAGINATION_TOTAL_RESULTS = {{ pagination.total_results|default(0) }};
 function toggleSource(sourceId) {
   const resultsDiv  = document.getElementById(sourceId + '-results');
   const icon        = document.getElementById('icon-' + sourceId);

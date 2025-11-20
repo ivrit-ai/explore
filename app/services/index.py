@@ -172,25 +172,61 @@ class TranscriptIndex:
             raise IndexError(f"Document {doc_id} not found")
         return result[0]
 
-    def search_hits(self, query: str) -> list[tuple[int, int]]:
-        """Search for query and return (episode_idx, char_offset) pairs for hits."""
-        return self._search_sqlite_simple(query)
-    
-    def _search_sqlite_simple(self, query: str) -> list[tuple[int, int]]:
-        """Search using SQLite UDF for pattern matching."""
+    def search_hits(self, query: str, date_from: Optional[str] = None,
+                   date_to: Optional[str] = None, sources: Optional[list[str]] = None) -> list[tuple[int, int]]:
+        """Search for query and return (episode_idx, char_offset) pairs for hits.
+
+        Args:
+            query: Search query string
+            date_from: Optional start date filter (YYYY-MM-DD format)
+            date_to: Optional end date filter (YYYY-MM-DD format)
+            sources: Optional list of sources to filter by
+        """
+        return self._search_sqlite_simple(query, date_from, date_to, sources)
+
+    def _search_sqlite_simple(self, query: str, date_from: Optional[str] = None,
+                             date_to: Optional[str] = None, sources: Optional[list[str]] = None) -> list[tuple[int, int]]:
+        """Search using SQLite UDF for pattern matching with optional filters."""
 
         log = logging.getLogger("index")
-        log.info(f"Searching for query: {query}")
+        log.info(f"Searching for query: {query}, date_from: {date_from}, date_to: {date_to}, sources: {sources}")
 
-        cursor = self._db.execute("""
+        # Build WHERE clause with filters
+        where_clauses = ["full_text LIKE ?"]
+        params = [f'%{query}%']
+
+        # Add date filters
+        if date_from:
+            where_clauses.append("episode_date >= ?")
+            params.append(date_from)
+        if date_to:
+            where_clauses.append("episode_date <= ?")
+            params.append(date_to)
+
+        # Add source filter
+        if sources and len(sources) > 0:
+            # Create placeholders for IN clause
+            placeholders = ','.join('?' * len(sources))
+            where_clauses.append(f"source IN ({placeholders})")
+            params.extend(sources)
+
+        # Combine WHERE clauses
+        where_clause = ' AND '.join(where_clauses)
+
+        sql = f"""
             SELECT doc_id, match_offsets(full_text, ?) as offsets
-            FROM documents 
-            WHERE full_text LIKE ?
-        """, [query, f'%{query}%'])
-        
+            FROM documents
+            WHERE {where_clause}
+        """
+
+        # Add query parameter at the beginning for match_offsets function
+        all_params = [query] + params
+
+        cursor = self._db.execute(sql, all_params)
+
         result = cursor.fetchall()
         hits = []
-        
+
         for row in result:
             doc_id = row[0]
             offsets_str = row[1]
@@ -199,7 +235,9 @@ class TranscriptIndex:
                 offsets = [int(offset) for offset in offsets_str.split(',')]
                 # Add (doc_id, offset) pairs to hits
                 hits.extend([(doc_id, offset) for offset in offsets])
-        
+
+        log.info(f"Search completed: found {len(hits)} hits")
+
         return hits
 
 

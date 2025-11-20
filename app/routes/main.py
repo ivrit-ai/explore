@@ -35,6 +35,12 @@ def search():
     page       = max(1, int(request.args.get('page', 1)))
     start_time = time.time()
 
+    # Get filter parameters from request
+    date_from = request.args.get('date_from', '').strip() or None
+    date_to = request.args.get('date_to', '').strip() or None
+    sources_param = request.args.get('sources', '').strip()
+    sources = [s.strip() for s in sources_param.split(',') if s.strip()] if sources_param else None
+
     global search_service, file_records
     if file_records is None:
         from ..utils import get_transcripts
@@ -43,10 +49,11 @@ def search():
     if search_service is None:
         # Get database type from environment
         db_type = os.environ.get('DEFAULT_DB_TYPE', 'sqlite')
-        
+
         search_service = SearchService(IndexManager(file_records, db_type=db_type))
 
-    hits = search_service.search(query)
+    # Apply filters to search
+    hits = search_service.search(query, date_from=date_from, date_to=date_to, sources=sources)
     total = len(hits)
 
     # simple slicing
@@ -119,7 +126,11 @@ def search():
                            query=query,
                            results=display_groups,
                            pagination=pagination,
-                           max_results_per_page=per_page)
+                           max_results_per_page=per_page,
+                           date_from=date_from,
+                           date_to=date_to,
+                           sources=sources,
+                           sources_param=sources_param)
 
 @bp.route('/search/metadata')
 @login_required

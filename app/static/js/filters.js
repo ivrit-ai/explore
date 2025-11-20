@@ -1,22 +1,31 @@
-// filters.js – Client-side filtering for search results
+// filters.js – Server-side filtering via URL parameters
 // ============================================================
 
 /* ========================
    Filter State Management
    ======================== */
 const filterState = {
-    sources: new Set(),
-    dateFrom: null,
-    dateTo: null,
-    allSources: new Map(), // source -> count
-    totalResults: 0,
-    visibleResults: 0,
-    fullMetadata: null, // Store full metadata from API
-    totalQueryResults: 0 // Total results from search query (all pages)
+    allSources: new Map(), // source -> count from metadata
+    fullMetadata: null
 };
 
 /* ========================
-   0 - Fetch Metadata from API
+   Get Current URL Parameters
+   ======================== */
+function getUrlParams() {
+    const urlParams = new URLSearchParams(window.location.search);
+    return {
+        query: urlParams.get('q') || '',
+        dateFrom: urlParams.get('date_from') || '',
+        dateTo: urlParams.get('date_to') || '',
+        sources: urlParams.get('sources') || '',
+        page: urlParams.get('page') || '1',
+        maxResults: urlParams.get('max_results_per_page') || '100'
+    };
+}
+
+/* ========================
+   Fetch Metadata from API
    ======================== */
 async function fetchMetadata(query) {
     try {
@@ -33,287 +42,299 @@ async function fetchMetadata(query) {
 }
 
 /* ========================
-   1 - Initialize Filters
+   Initialize Filters from URL
    ======================== */
 async function initializeFilters() {
-    // Get query from URL or page
-    const urlParams = new URLSearchParams(window.location.search);
-    const query = urlParams.get('q') || '';
-    
-    if (!query) {
-        console.warn('No query found, using current page data only');
-        initializeFiltersFromPage();
+    const params = getUrlParams();
+
+    if (!params.query) {
+        console.warn('No query found');
         return;
     }
-    
-    // Fetch full metadata from API
-    const metadata = await fetchMetadata(query);
-    
+
+    // Fetch full metadata from API (for populating source checkboxes)
+    const metadata = await fetchMetadata(params.query);
+
     if (metadata && metadata.sources && metadata.date_range) {
-        // Use full metadata from API
         filterState.fullMetadata = metadata;
-        
+
         // Populate sources map from API data
         filterState.allSources.clear();
         Object.entries(metadata.sources).forEach(([source, count]) => {
             filterState.allSources.set(source, count);
         });
-        
-        // Set total results from API
-        filterState.totalResults = metadata.total_results || 0;
-        
+
         // Populate UI with full metadata
-        populateSourceFilters();
-        setDateRangeLimits();
-    } else {
-        // Fallback to current page data if API fails
-        console.warn('Failed to fetch metadata, using current page data');
-        initializeFiltersFromPage();
+        populateSourceFilters(params.sources);
+        setDateRangeLimits(metadata.date_range);
     }
-    
+
+    // Pre-populate form fields from URL parameters
+    populateFormFromUrl(params);
+
     // Initialize event handlers
     setupFilterEventHandlers();
-    
-    // Apply initial filters (will show all since all sources are selected by default)
-    applyFilters();
 }
 
-function initializeFiltersFromPage() {
-    // Extract metadata from all source groups on current page (fallback)
-    const sourceGroups = document.querySelectorAll('.source-group');
-    filterState.totalResults = sourceGroups.length;
-    
-    // Build source map with counts
-    sourceGroups.forEach(group => {
-        const source = group.dataset.source;
-        
-        if (source) {
-            const currentCount = filterState.allSources.get(source) || 0;
-            filterState.allSources.set(source, currentCount + 1);
-        }
-    });
-    
-    // Populate source filter UI
-    populateSourceFilters();
-    
-    // Set date range limits
-    setDateRangeLimits();
+/* ========================
+   Populate Form from URL Parameters
+   ======================== */
+function populateFormFromUrl(params) {
+    // Set date inputs
+    const dateFromInput = document.getElementById('filter-date-from');
+    const dateToInput = document.getElementById('filter-date-to');
+
+    if (dateFromInput && params.dateFrom) {
+        dateFromInput.value = params.dateFrom;
+    }
+    if (dateToInput && params.dateTo) {
+        dateToInput.value = params.dateTo;
+    }
 }
 
-function populateSourceFilters() {
+/* ========================
+   Populate Source Filter Checkboxes
+   ======================== */
+function populateSourceFilters(selectedSourcesParam) {
     const sourcesContainer = document.getElementById('filter-sources');
     if (!sourcesContainer) return;
-    
+
     // Clear loading message
     sourcesContainer.innerHTML = '';
-    
+
     if (filterState.allSources.size === 0) {
         sourcesContainer.innerHTML = '<div class="filter-loading">לא נמצאו מקורות</div>';
         return;
     }
-    
+
+    // Parse selected sources from URL parameter
+    const selectedSources = new Set(
+        selectedSourcesParam ? selectedSourcesParam.split(',').map(s => s.trim()) : []
+    );
+
+    // If no sources are specified in URL, select all by default
+    const selectAll = selectedSources.size === 0;
+
     // Sort sources alphabetically
     const sortedSources = Array.from(filterState.allSources.entries()).sort((a, b) => {
         return a[0].localeCompare(b[0], 'he');
     });
-    
+
     // Create checkboxes for each source
     sortedSources.forEach(([source, count]) => {
         const sourceItem = document.createElement('div');
         sourceItem.className = 'filter-source-item';
-        
+
         const checkbox = document.createElement('input');
         checkbox.type = 'checkbox';
         checkbox.id = `filter-source-${source.replace(/[^a-zA-Z0-9]/g, '-')}`;
         checkbox.value = source;
-        checkbox.checked = true; // All sources selected by default
-        
+        checkbox.checked = selectAll || selectedSources.has(source);
+
         const label = document.createElement('label');
         label.htmlFor = checkbox.id;
         label.innerHTML = `
             <span>${source.replace('/', ': ')}</span>
             <span class="filter-source-count">${count}</span>
         `;
-        
+
         sourceItem.appendChild(checkbox);
         sourceItem.appendChild(label);
         sourcesContainer.appendChild(sourceItem);
-        
-        // Add to filter state (all selected by default)
-        filterState.sources.add(source);
     });
+
+    // Update toggle all button state
+    updateToggleAllButton();
 }
 
-function setDateRangeLimits() {
-    let minDateStr = null;
-    let maxDateStr = null;
-    
-    // Use full metadata if available
-    if (filterState.fullMetadata && filterState.fullMetadata.date_range) {
-        minDateStr = filterState.fullMetadata.date_range.min;
-        maxDateStr = filterState.fullMetadata.date_range.max;
-    } else {
-        // Fallback: extract from current page
-        const sourceGroups = document.querySelectorAll('.source-group');
-        const dates = [];
-        
-        sourceGroups.forEach(group => {
-            const dateStr = group.dataset.episodeDate;
-            if (dateStr) {
-                dates.push(dateStr);
-            }
-        });
-        
-        if (dates.length > 0) {
-            dates.sort(); // Sort as strings (YYYY-MM-DD format)
-            minDateStr = dates[0];
-            maxDateStr = dates[dates.length - 1];
-        }
+/* ========================
+   Set Date Range Input Limits
+   ======================== */
+function setDateRangeLimits(dateRange) {
+    if (!dateRange || !dateRange.min || !dateRange.max) return;
+
+    const dateFromInput = document.getElementById('filter-date-from');
+    const dateToInput = document.getElementById('filter-date-to');
+
+    if (dateFromInput) {
+        dateFromInput.min = dateRange.min;
+        dateFromInput.max = dateRange.max;
     }
-    
-    if (minDateStr && maxDateStr) {
-        const dateFromInput = document.getElementById('filter-date-from');
-        const dateToInput = document.getElementById('filter-date-to');
-        
-        if (dateFromInput) {
-            dateFromInput.min = minDateStr;
-            dateFromInput.max = maxDateStr;
-        }
-        
-        if (dateToInput) {
-            dateToInput.min = minDateStr;
-            dateToInput.max = maxDateStr;
-        }
+
+    if (dateToInput) {
+        dateToInput.min = dateRange.min;
+        dateToInput.max = dateRange.max;
     }
 }
 
 /* ========================
-   2 - Apply Filters
+   Apply Filters (Navigate to URL with parameters)
    ======================== */
 function applyFilters() {
+    const params = getUrlParams();
+
     // Get current filter values
     const dateFromInput = document.getElementById('filter-date-from');
     const dateToInput = document.getElementById('filter-date-to');
-    
-    filterState.dateFrom = dateFromInput?.value || null;
-    filterState.dateTo = dateToInput?.value || null;
-    
+
+    const dateFrom = dateFromInput?.value || '';
+    const dateTo = dateToInput?.value || '';
+
     // Get selected sources
-    filterState.sources.clear();
+    const selectedSources = [];
     document.querySelectorAll('.filter-source-item input[type="checkbox"]:checked').forEach(checkbox => {
-        filterState.sources.add(checkbox.value);
+        selectedSources.push(checkbox.value);
     });
-    
-    // Apply filters to each source group
-    const sourceGroups = document.querySelectorAll('.source-group');
-    let visibleCount = 0;
-    
-    sourceGroups.forEach(group => {
-        const source = group.dataset.source;
-        const dateStr = group.dataset.episodeDate;
-        
-        // Check source filter
-        const sourceMatch = filterState.sources.size === 0 || filterState.sources.has(source);
-        
-        // Check date filter
-        let dateMatch = true;
-        if (dateStr && (filterState.dateFrom || filterState.dateTo)) {
-            // Parse dates as YYYY-MM-DD strings for reliable comparison
-            const groupDateStr = dateStr.split('T')[0]; // Get just the date part if there's time
-            const groupDate = new Date(groupDateStr + 'T00:00:00'); // Normalize to start of day
-            
-            if (!isNaN(groupDate.getTime())) {
-                if (filterState.dateFrom) {
-                    const fromDate = new Date(filterState.dateFrom + 'T00:00:00');
-                    if (groupDate < fromDate) {
-                        dateMatch = false;
-                    }
-                }
-                if (filterState.dateTo) {
-                    const toDate = new Date(filterState.dateTo + 'T23:59:59');
-                    if (groupDate > toDate) {
-                        dateMatch = false;
-                    }
-                }
-            }
-        }
-        
-        // Show or hide group
-        if (sourceMatch && dateMatch) {
-            group.classList.remove('filtered');
-            visibleCount++;
-        } else {
-            group.classList.add('filtered');
-        }
-    });
-    
-    filterState.visibleResults = visibleCount;
-    
-    // Update UI
-    updateFilterStats();
-    updateActiveFiltersIndicator();
-    updateEmptyState();
+
+    // Build URL with filter parameters
+    const url = new URL(window.location.href);
+    url.searchParams.set('q', params.query);
+    url.searchParams.set('max_results_per_page', params.maxResults);
+    url.searchParams.set('page', '1'); // Reset to page 1 when applying filters
+
+    // Set filter parameters
+    if (dateFrom) {
+        url.searchParams.set('date_from', dateFrom);
+    } else {
+        url.searchParams.delete('date_from');
+    }
+
+    if (dateTo) {
+        url.searchParams.set('date_to', dateTo);
+    } else {
+        url.searchParams.delete('date_to');
+    }
+
+    // Only set sources parameter if not all sources are selected
+    if (selectedSources.length > 0 && selectedSources.length < filterState.allSources.size) {
+        url.searchParams.set('sources', selectedSources.join(','));
+    } else {
+        url.searchParams.delete('sources');
+    }
+
+    // Navigate to new URL (this will reload the page with filters)
+    window.location.href = url.toString();
 }
 
 /* ========================
-   3 - Clear Filters
+   Clear Filters
    ======================== */
 function clearFilters() {
-    // Clear date inputs
-    const dateFromInput = document.getElementById('filter-date-from');
-    const dateToInput = document.getElementById('filter-date-to');
-    
-    if (dateFromInput) dateFromInput.value = '';
-    if (dateToInput) dateToInput.value = '';
-    
-    filterState.dateFrom = null;
-    filterState.dateTo = null;
-    
-    // Select all sources
-    document.querySelectorAll('.filter-source-item input[type="checkbox"]').forEach(checkbox => {
-        checkbox.checked = true;
-        filterState.sources.add(checkbox.value);
-    });
-    
-    // Apply filters (will show all)
-    applyFilters();
+    const params = getUrlParams();
+
+    // Build URL without filter parameters
+    const url = new URL(window.location.href);
+    url.searchParams.set('q', params.query);
+    url.searchParams.set('max_results_per_page', params.maxResults);
+    url.searchParams.set('page', '1');
+    url.searchParams.delete('date_from');
+    url.searchParams.delete('date_to');
+    url.searchParams.delete('sources');
+
+    // Navigate to new URL
+    window.location.href = url.toString();
 }
 
 /* ========================
-   4 - Update UI Feedback
+   Toggle All Sources
    ======================== */
-function updateFilterStats() {
-    const statsElement = document.getElementById('filtered-stats');
-    if (statsElement) {
-        // Count visible source groups on CURRENT PAGE only
-        const visibleOnPage = document.querySelectorAll('.source-group:not(.filtered)').length;
-        
-        // Get total results from query (all pages)
-        const totalFromQuery = filterState.totalQueryResults || filterState.totalResults;
-        
-        // Format: מציג X תוצאות מתוך Y תוצאות לשאילתא
-        statsElement.textContent = `מציג ${visibleOnPage} תוצאות מתוך ${totalFromQuery} תוצאות לשאילתא`;
+function toggleAllSources() {
+    const checkboxes = document.querySelectorAll('.filter-source-item input[type="checkbox"]');
+    if (checkboxes.length === 0) return;
+
+    // Check if all are currently selected
+    const allSelected = Array.from(checkboxes).every(cb => cb.checked);
+
+    // Toggle all checkboxes
+    checkboxes.forEach(checkbox => {
+        checkbox.checked = !allSelected;
+    });
+
+    // Update button text
+    updateToggleAllButton();
+}
+
+function updateToggleAllButton() {
+    const button = document.getElementById('toggle-all-sources');
+    if (!button) return;
+
+    const checkboxes = document.querySelectorAll('.filter-source-item input[type="checkbox"]');
+    if (checkboxes.length === 0) return;
+
+    const allSelected = Array.from(checkboxes).every(cb => cb.checked);
+    button.textContent = allSelected ? 'בטל הכל' : 'בחר הכל';
+}
+
+/* ========================
+   Panel Toggle
+   ======================== */
+function setupPanelToggle() {
+    const panel = document.getElementById('filter-panel');
+    const toggleBtn = document.getElementById('filter-panel-toggle');
+    const openBtn = document.getElementById('filter-panel-open');
+
+    if (toggleBtn) {
+        toggleBtn.addEventListener('click', () => {
+            if (panel) {
+                panel.classList.remove('open');
+            }
+        });
+    }
+
+    if (openBtn) {
+        openBtn.addEventListener('click', () => {
+            if (panel) {
+                panel.classList.add('open');
+            }
+        });
     }
 }
 
+/* ========================
+   Event Handlers Setup
+   ======================== */
+function setupFilterEventHandlers() {
+    // Clear filters button
+    const clearBtn = document.getElementById('clear-filters-btn');
+    if (clearBtn) {
+        clearBtn.addEventListener('click', clearFilters);
+    }
+
+    // Toggle all sources button
+    const toggleAllBtn = document.getElementById('toggle-all-sources');
+    if (toggleAllBtn) {
+        toggleAllBtn.addEventListener('click', toggleAllSources);
+    }
+
+    // Apply filters button
+    const applyBtn = document.getElementById('apply-filters-btn');
+    if (applyBtn) {
+        applyBtn.addEventListener('click', applyFilters);
+    }
+
+    // Panel toggle
+    setupPanelToggle();
+
+    // Check if filters are active and show clear button
+    updateActiveFiltersIndicator();
+}
+
+/* ========================
+   Update Active Filters Indicator
+   ======================== */
 function updateActiveFiltersIndicator() {
+    const params = getUrlParams();
     const indicator = document.getElementById('active-filters-indicator');
     const countElement = document.getElementById('active-filters-count');
     const clearBtn = document.getElementById('clear-filters-btn');
-    
+
     let activeCount = 0;
-    
-    // Count date filters
-    if (filterState.dateFrom) activeCount++;
-    if (filterState.dateTo) activeCount++;
-    
-    // Count source filters (if not all selected)
-    const totalSources = filterState.allSources.size;
-    const selectedSources = filterState.sources.size;
-    if (selectedSources < totalSources) {
-        activeCount++;
-    }
-    
+
+    // Count active filters
+    if (params.dateFrom) activeCount++;
+    if (params.dateTo) activeCount++;
+    if (params.sources) activeCount++; // Source filter is active if specified
+
     if (activeCount > 0) {
         if (indicator) {
             indicator.style.display = 'block';
@@ -330,97 +351,15 @@ function updateActiveFiltersIndicator() {
     }
 }
 
-function updateEmptyState() {
-    const emptyState = document.getElementById('filtered-empty-state');
-    const resultsContainer = document.querySelector('.results');
-    
-    if (filterState.visibleResults === 0 && filterState.totalResults > 0) {
-        if (emptyState) emptyState.style.display = 'block';
-        if (resultsContainer) resultsContainer.style.display = 'none';
-    } else {
-        if (emptyState) emptyState.style.display = 'none';
-        if (resultsContainer) resultsContainer.style.display = 'block';
-    }
-}
-
 /* ========================
-   5 - Panel Toggle
-   ======================== */
-function setupPanelToggle() {
-    const panel = document.getElementById('filter-panel');
-    const toggleBtn = document.getElementById('filter-panel-toggle');
-    const openBtn = document.getElementById('filter-panel-open');
-    
-    if (toggleBtn) {
-        toggleBtn.addEventListener('click', () => {
-            if (panel) {
-                panel.classList.remove('open');
-            }
-        });
-    }
-    
-    if (openBtn) {
-        openBtn.addEventListener('click', () => {
-            if (panel) {
-                panel.classList.add('open');
-            }
-        });
-    }
-}
-
-/* ========================
-   6 - Event Handlers Setup
-   ======================== */
-function setupFilterEventHandlers() {
-    // Date inputs
-    const dateFromInput = document.getElementById('filter-date-from');
-    const dateToInput = document.getElementById('filter-date-to');
-    
-    if (dateFromInput) {
-        dateFromInput.addEventListener('input', applyFilters);
-    }
-    
-    if (dateToInput) {
-        dateToInput.addEventListener('input', applyFilters);
-    }
-    
-    // Source checkboxes - use event delegation on the container
-    // This works even if checkboxes are added dynamically
-    const sourcesContainer = document.getElementById('filter-sources');
-    if (sourcesContainer) {
-        sourcesContainer.addEventListener('change', (e) => {
-            // Only handle changes from checkboxes
-            if (e.target.type === 'checkbox') {
-                applyFilters();
-            }
-        });
-    }
-    
-    // Clear filters button
-    const clearBtn = document.getElementById('clear-filters-btn');
-    if (clearBtn) {
-        clearBtn.addEventListener('click', clearFilters);
-    }
-    
-    // Panel toggle
-    setupPanelToggle();
-}
-
-/* ========================
-   7 - Initialize on DOM Ready
+   Initialize on DOM Ready
    ======================== */
 document.addEventListener('DOMContentLoaded', async () => {
-    // Get total query results from global variable set by template
-    if (typeof window.PAGINATION_TOTAL_RESULTS !== 'undefined') {
-        filterState.totalQueryResults = window.PAGINATION_TOTAL_RESULTS;
-    }
-    
     // Only initialize if we have results
     if (document.querySelectorAll('.source-group').length > 0) {
         await initializeFilters();
     }
 });
 
-// Make functions available globally for onclick handlers
+// Make clearFilters available globally for onclick handlers
 window.clearFilters = clearFilters;
-
