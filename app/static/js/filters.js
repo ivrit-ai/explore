@@ -16,6 +16,7 @@ function getUrlParams() {
     const urlParams = new URLSearchParams(window.location.search);
     return {
         query: urlParams.get('q') || '',
+        searchMode: urlParams.get('search_mode') || 'partial',
         dateFrom: urlParams.get('date_from') || '',
         dateTo: urlParams.get('date_to') || '',
         sources: urlParams.get('sources') || '',
@@ -189,6 +190,7 @@ function applyFilters() {
     // Build URL with filter parameters
     const url = new URL(window.location.href);
     url.searchParams.set('q', params.query);
+    url.searchParams.set('search_mode', params.searchMode);
     url.searchParams.set('max_results_per_page', params.maxResults);
     url.searchParams.set('page', '1'); // Reset to page 1 when applying filters
 
@@ -222,9 +224,10 @@ function applyFilters() {
 function clearFilters() {
     const params = getUrlParams();
 
-    // Build URL without filter parameters
+    // Build URL without filter parameters (but keep search mode)
     const url = new URL(window.location.href);
     url.searchParams.set('q', params.query);
+    url.searchParams.set('search_mode', params.searchMode);
     url.searchParams.set('max_results_per_page', params.maxResults);
     url.searchParams.set('page', '1');
     url.searchParams.delete('date_from');

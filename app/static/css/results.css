@@ -60,6 +60,33 @@
     background-color: #3182ce;
 }
 
+/* Search Mode Radio Buttons (Compact Inline Version for Results Page) */
+.search-mode-container.compact {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0;
+}
+
+.search-mode-options.inline {
+    flex-direction: row;
+    gap: 1rem;
+}
+
+.search-mode-options.inline .radio-option {
+    padding: 0.3rem;
+    gap: 0.3rem;
+}
+
+.search-mode-options.inline .radio-option > span {
+    font-size: 0.85rem;
+}
+
+.search-mode-container.compact .search-mode-label {
+    font-size: 0.85rem;
+    margin: 0;
+}
+
 .stats {
     margin-bottom: 1.5rem;
     color: #4a5568;

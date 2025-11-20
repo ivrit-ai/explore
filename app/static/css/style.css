@@ -118,6 +118,63 @@ button:hover {
     color: #4a5568;
 }
 
+/* Search Mode Radio Buttons */
+.search-mode-container {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+}
+
+.search-mode-label {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #2d3748;
+}
+
+.search-mode-options {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.radio-option {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    cursor: pointer;
+    padding: 0.5rem;
+    border-radius: 6px;
+    transition: background-color 0.2s;
+    position: relative;
+}
+
+.radio-option:hover {
+    background-color: #f7fafc;
+}
+
+.radio-option input[type="radio"] {
+    margin-top: 0.2rem;
+    cursor: pointer;
+    width: 1.1rem;
+    height: 1.1rem;
+    accent-color: #4299e1;
+}
+
+.radio-option > span:first-of-type {
+    font-size: 0.9rem;
+    color: #2d3748;
+    font-weight: 500;
+}
+
+.radio-tooltip {
+    display: block;
+    font-size: 0.8rem;
+    color: #718096;
+    margin-top: 0.25rem;
+    line-height: 1.3;
+}
+
 .input-container input[type="number"] {
     width: 70px;
     padding: 0.3rem;
@@ -210,4 +267,90 @@ button:hover {
 
 .privacy-section li {
     margin-bottom: 0.5rem;
+}
+
+/* Regex Examples Section */
+.regex-examples {
+    background: white;
+    padding: 2rem;
+    border-radius: 12px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    margin-top: 2rem;
+}
+
+.regex-examples h3 {
+    color: #2d3748;
+    font-size: 1.25rem;
+    margin-bottom: 1rem;
+    font-weight: 600;
+}
+
+.regex-note {
+    font-size: 0.9rem;
+    color: #4a5568;
+    margin-bottom: 1rem;
+    line-height: 1.5;
+}
+
+.regex-note code {
+    background-color: #f7fafc;
+    padding: 0.2rem 0.4rem;
+    border-radius: 3px;
+    font-family: 'Courier New', monospace;
+    font-size: 0.85rem;
+    color: #2d3748;
+}
+
+.regex-note a {
+    color: #4299e1;
+    text-decoration: none;
+    font-weight: 500;
+}
+
+.regex-note a:hover {
+    color: #3182ce;
+    text-decoration: underline;
+}
+
+.examples-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.example-item {
+    background-color: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    padding: 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.example-item:hover {
+    border-color: #cbd5e0;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.example-item code {
+    background-color: white;
+    border: 1px solid #e2e8f0;
+    padding: 0.5rem;
+    border-radius: 4px;
+    font-family: 'Courier New', monospace;
+    font-size: 0.9rem;
+    color: #2d3748;
+    word-break: break-all;
+    direction: ltr;
+    text-align: left;
+}
+
+.example-item span {
+    font-size: 0.85rem;
+    color: #718096;
+    text-align: right;
+    direction: rtl;
 } 

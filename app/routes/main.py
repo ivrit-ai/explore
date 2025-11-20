@@ -36,6 +36,12 @@ def search():
     page       = max(1, int(request.args.get('page', 1)))
     start_time = time.time()
 
+    # Get search mode parameter
+    search_mode = request.args.get('search_mode', 'partial').strip()
+    # Validate search mode
+    if search_mode not in ['exact', 'partial', 'regex']:
+        search_mode = 'partial'
+
     # Get filter parameters from request
     date_from = request.args.get('date_from', '').strip() or None
     date_to = request.args.get('date_to', '').strip() or None
@@ -53,8 +59,9 @@ def search():
 
         search_service = SearchService(IndexManager(file_records, db_type=db_type))
 
-    # Apply filters to search
-    hits = search_service.search(query, date_from=date_from, date_to=date_to, sources=sources)
+    # Apply filters to search with search mode
+    hits = search_service.search(query, search_mode=search_mode, date_from=date_from,
+                                date_to=date_to, sources=sources)
     total = len(hits)
 
     # simple slicing
@@ -128,6 +135,7 @@ def search():
                            results=display_groups,
                            pagination=pagination,
                            max_results_per_page=per_page,
+                           search_mode=search_mode,
                            date_from=date_from,
                            date_to=date_to,
                            sources=sources,

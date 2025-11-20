@@ -24,12 +24,13 @@ class SearchService:
         logger.info(f"SearchService initialized with {doc_count} texts, total size: {total_chars:,} characters")
 
     # ­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­ #
-    def search(self, query: str, date_from: str = None, date_to: str = None,
-               sources: List[str] = None) -> List[SearchHit]:
-        """Search with optional date and source filters.
+    def search(self, query: str, search_mode: str = 'partial', date_from: str = None,
+               date_to: str = None, sources: List[str] = None) -> List[SearchHit]:
+        """Search with optional filters and search mode.
 
         Args:
             query: Search query string
+            search_mode: Search mode - 'exact' (whole words), 'partial' (substring), or 'regex'
             date_from: Optional start date filter (YYYY-MM-DD format)
             date_to: Optional end date filter (YYYY-MM-DD format)
             sources: Optional list of sources to filter by
@@ -38,15 +39,16 @@ class SearchService:
         idx = self._index_mgr.get()
 
         # Log search parameters
-        logger.info(f"Starting search for query: '{query}', date_from: {date_from}, "
+        logger.info(f"Starting search for query: '{query}', mode: {search_mode}, date_from: {date_from}, "
                    f"date_to: {date_to}, sources: {sources}")
 
-        hits_data = idx.search_hits(query, date_from=date_from, date_to=date_to, sources=sources)
+        hits_data = idx.search_hits(query, search_mode=search_mode, date_from=date_from,
+                                    date_to=date_to, sources=sources)
         hits = [SearchHit(episode_idx, char_offset) for episode_idx, char_offset in hits_data]
 
         total_time = time.perf_counter() - start_time
         logger.info(f"Search completed in {total_time*1000:.2f}ms. "
-                   f"Found {len(hits)} hits")
+                   f"Found {len(hits)} hits with mode '{search_mode}'")
         return hits
 
     def segment(self, hit: SearchHit) -> Segment:

@@ -27,6 +27,23 @@
 <form action="{{ url_for('main.search') }}" method="GET" class="search-form">
   <input type="text" name="q" placeholder="הזן מונח לחיפוש…" value="{{ query }}">
   <div class="search-options">
+    <div class="search-mode-container compact">
+      <label class="search-mode-label">סוג:</label>
+      <div class="search-mode-options inline">
+        <label class="radio-option">
+          <input type="radio" name="search_mode" value="exact" {% if search_mode == 'exact' %}checked{% endif %}>
+          <span>מדויק</span>
+        </label>
+        <label class="radio-option">
+          <input type="radio" name="search_mode" value="partial" {% if search_mode == 'partial' or not search_mode %}checked{% endif %}>
+          <span>חלקי</span>
+        </label>
+        <label class="radio-option">
+          <input type="radio" name="search_mode" value="regex" {% if search_mode == 'regex' %}checked{% endif %}>
+          <span>Regex</span>
+        </label>
+      </div>
+    </div>
     <div class="input-container">
       <label for="max-results">תוצאות לעמוד:</label>
       <input type="number" name="max_results_per_page" id="max-results"
