@@ -9,6 +9,7 @@ from tqdm.auto import tqdm
 import itertools
 from datetime import datetime
 import re
+import uuid
 
 from ..utils import FileRecord
 from .db import DatabaseService
@@ -42,7 +43,7 @@ class TranscriptIndex:
     def get_document_info(self, doc_id: int) -> dict:
         """Get document information including source, episode, and text."""
         cursor = self._db.execute(
-                "SELECT doc_id, source, episode, episode_date, episode_title, full_text FROM documents WHERE doc_id = ?", 
+                "SELECT doc_id, uuid, source, episode, episode_date, episode_title, full_text FROM documents WHERE doc_id = ?",
             [doc_id]
         )
         result = cursor.fetchone()
@@ -50,12 +51,24 @@ class TranscriptIndex:
             raise IndexError(f"Document {doc_id} not found")
         return {
             "doc_id": result[0],
-            "source": result[1],
-            "episode": result[2],
-            "episode_date": result[3],
-            "episode_title": result[4],
-            "full_text": result[5]
+            "uuid": result[1],
+            "source": result[2],
+            "episode": result[3],
+            "episode_date": result[4],
+            "episode_title": result[5],
+            "full_text": result[6]
         }
+
+    def get_episode_by_uuid(self, doc_uuid: str) -> str:
+        """Get episode path by UUID."""
+        cursor = self._db.execute(
+            "SELECT episode FROM documents WHERE uuid = ?",
+            [doc_uuid]
+        )
+        result = cursor.fetchone()
+        if not result:
+            raise IndexError(f"Document with UUID {doc_uuid} not found")
+        return result[0]
     
     def get_segments_for_document(self, doc_id: int) -> list[dict]:
         """Get all segments for a document."""
@@ -196,11 +209,19 @@ def _setup_schema(db: DatabaseService):
     db.execute("PRAGMA journal_mode = WAL")
     db.execute("PRAGMA synchronous = NORMAL")
     db.execute("PRAGMA cache_size = 1000000")
-    
+
+    # Drop existing tables if they exist (for migration to UUID schema)
+    try:
+        db.execute("DROP TABLE IF EXISTS segments")
+        db.execute("DROP TABLE IF EXISTS documents")
+    except:
+        pass
+
     # Create documents table
     db.execute("""
         CREATE TABLE documents (
             doc_id INTEGER PRIMARY KEY,
+            uuid VARCHAR UNIQUE NOT NULL,
             source VARCHAR,
             episode VARCHAR,
             episode_date DATE,
@@ -208,7 +229,7 @@ def _setup_schema(db: DatabaseService):
             full_text TEXT
         )
     """)
-    
+
     # Create segments table
     db.execute("""
         CREATE TABLE segments (
@@ -222,26 +243,31 @@ def _setup_schema(db: DatabaseService):
             FOREIGN KEY (doc_id) REFERENCES documents(doc_id)
         )
     """)
-    
+
     # Create indexes for better performance
     db.execute("""
-        CREATE INDEX idx_segments_doc_id 
+        CREATE INDEX IF NOT EXISTS idx_segments_doc_id
         ON segments(doc_id)
     """)
-    
+
     db.execute("""
-        CREATE INDEX idx_segments_segment_id 
+        CREATE INDEX IF NOT EXISTS idx_segments_segment_id
         ON segments(segment_id)
     """)
-    
+
     db.execute("""
-        CREATE INDEX idx_segments_char_offset 
+        CREATE INDEX IF NOT EXISTS idx_segments_char_offset
         ON segments(char_offset)
     """)
     
     db.execute("""
-        CREATE INDEX idx_segments_doc_id_segment_id 
+        CREATE INDEX IF NOT EXISTS idx_segments_doc_id_segment_id
         ON segments(doc_id, segment_id)
+    """)
+
+    db.execute("""
+        CREATE INDEX IF NOT EXISTS idx_documents_uuid
+        ON documents(uuid)
     """)
 
 
@@ -378,11 +404,12 @@ class IndexManager:
                     
                     episode_date, episode_title = self.split_episode(rec_id)
                     source = rec_id.rsplit('/', 1)[0]
+                    doc_uuid = str(uuid.uuid4())
                     db.execute(
-                        """INSERT INTO documents 
-                        (doc_id, source, episode, episode_date, episode_title, full_text) 
-                        VALUES (?, ?, ?, ?, ?, ?)""",
-                        [doc_id, source, rec_id, episode_date, episode_title, data["full"]]
+                        """INSERT INTO documents
+                        (doc_id, uuid, source, episode, episode_date, episode_title, full_text)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                        [doc_id, doc_uuid, source, rec_id, episode_date, episode_title, data["full"]]
                     )
                     # Insert all segments for this document in one batch
                     # Prepare batch insert for segments

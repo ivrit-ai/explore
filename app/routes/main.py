@@ -62,6 +62,7 @@ def search():
         records.append({
             "episode_idx":  h.episode_idx,
             "char_offset":  h.char_offset,
+            "uuid":         doc_info.get("uuid", ""),
             "episode": doc_info.get("episode", ""),
             "source":       doc_info.get("source", ""),
             "segment_idx":  seg.seg_idx,
@@ -82,6 +83,7 @@ def search():
         display_groups.append({
             'source': source,
             'episode_idx': episode_idx,
+            'uuid': meta.get('uuid', ''),
             'episode_title': meta.get('episode_title', ''),
             'episode_date': meta.get('episode_date', ''),
             'episode': meta.get('episode', ''),

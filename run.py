@@ -108,7 +108,6 @@ app = init_app(str(data_root))
 with app.app_context():
     file_records = init_file_service(json_dir, audio_dir)
     file_records = file_records[:10] #DEBUG
-    print(file_records)
     from app import init_index_manager
     index_manager = init_index_manager(
         app,
@@ -141,8 +140,8 @@ with app.app_context():
 if __name__ == "__main__":
     host = "0.0.0.0"
     if args.dev:
-        log.info("DEV mode – http://localhost:5000")
-        app.run(host=host, port=5000, debug=False, threaded=True)
+        log.info("DEV mode – http://localhost:5001")
+        app.run(host=host, port=5001, debug=False, threaded=True)
     else:
         if not (Path(args.ssl_cert).exists() and Path(args.ssl_key).exists()):
             log.error("SSL cert/key not found. Use --dev for HTTP mode or supply valid paths.")

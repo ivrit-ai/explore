@@ -64,37 +64,38 @@
 
   {# group the flat results list by 'source' (== recording ID) #}
   {% for group in results %}
+  {% set group_id = 'group-' ~ loop.index %}
   <div class="source-group">
 
-    <div class="source-header" 
-      onclick="toggleSource({{ group.episode|tojson }})">
-      <span class="toggle-icon" id="icon-{{ group.episode }}">▶</span>
-    
+    <div class="source-header"
+      onclick='toggleSource("{{ group_id }}")'>
+      <span class="toggle-icon" id="icon-{{ group_id }}">▶</span>
+
       <!-- put all textual meta in one wrapper so Flex/Grid can treat it as a unit -->
       <div class="meta">
         <span class="source-title">{{ group.source|replace('/', ': ') }}</span>
         <span class="episode-title">{{ group.episode_title }}</span>
         <span class="episode-date">{{ group.episode_date }}</span>
       </div>
-    
+
       <!-- compact counter badge -->
       <span class="result-count">{{ group.results|length }} תוצאות</span>
-    
+
       <!-- leave the player placeholder last so it hugs the left in RTL -->
       <div class="audio-container source-audio-container"
-           data-source="{{ group.episode|urlencode }}"
+           data-uuid="{{ group.uuid }}"
            data-format="opus"
            data-start="{{ group.results[0].start_sec if group.results else 0 }}"
            data-end="{{ group.results[-1].end_sec if group.results else 0 }}">
       </div>
     </div>
-    
+
 
     {# ─────── individual hits for this source ─────── #}
-    <div id="{{ group.source }}-results" style="display:none">
+    <div id="{{ group_id }}-results" style="display:none">
       {% for result in group.results %}
       <div class="result-item"
-           data-source="{{ group.source }}"
+           data-uuid="{{ group.uuid }}"
            data-epi="{{ result.episode_idx }}"
            data-char="{{ result.char_offset }}"
            data-seg="{{ result.segment_idx }}"
@@ -105,8 +106,8 @@
           <div class="result-text-container">
             <div class="result-actions">
               <a href="{{ url_for('export.export_segment',
-                                source=group.source.split('/')[0],
-                                filename=group.source.split('/')[1] if '/' in group.source else group.source,
+                                source=group.episode.split('/')[0],
+                                filename=group.episode.split('/')[1] if '/' in group.episode else group.episode,
                                 start=result.start_sec,
                                 end=result.end_sec) }}"
                  class="btn btn-export">ייצא אודיו</a>

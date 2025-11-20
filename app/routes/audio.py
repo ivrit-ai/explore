@@ -91,24 +91,67 @@ def send_range_file(path, request_id=None):
     
     return resp
 
+@bp.route('/audio/uuid/<doc_uuid>')
+@login_required
+def serve_audio_by_uuid(doc_uuid):
+    request_id = str(uuid.uuid4())[:8]
+    start_time = time.time()
+
+    logger.info(f"[TIMING] [REQ:{request_id}] Audio request received for UUID: {doc_uuid}")
+
+    # Strip file extension from UUID (e.g., "uuid.opus" -> "uuid")
+    # The frontend sends UUIDs with file extensions, but the database stores them without
+    original_uuid = doc_uuid
+    doc_uuid_clean, ext = os.path.splitext(doc_uuid)
+    if ext:
+        logger.debug(f"[TIMING] [REQ:{request_id}] Stripped extension '{ext}' from UUID: '{original_uuid}' -> '{doc_uuid_clean}'")
+    else:
+        logger.debug(f"[TIMING] [REQ:{request_id}] No extension found in UUID: '{doc_uuid}'")
+
+    try:
+        # Get the episode path from the UUID
+        index = current_app.config.get('SEARCH_SERVICE')._index_mgr.get()
+        episode_path = index.get_episode_by_uuid(doc_uuid_clean)
+
+        logger.debug(f"[TIMING] [REQ:{request_id}] Resolved UUID {doc_uuid_clean} to episode: {episode_path}")
+
+        # Resolve the audio file path
+        audio_path = resolve_audio_path(episode_path)
+        if not audio_path:
+            logger.error(f"[TIMING] [REQ:{request_id}] Audio file not found for episode: {episode_path}")
+            return f"Audio file not found for {episode_path}", 404
+
+        logger.debug(f"[TIMING] [REQ:{request_id}] Found audio file: {audio_path}")
+        return send_range_file(audio_path, request_id)
+
+    except IndexError as e:
+        logger.error(f"[TIMING] [REQ:{request_id}] UUID not found: '{original_uuid}' (cleaned: '{doc_uuid_clean}')")
+        return f"UUID not found: {original_uuid}", 404
+    except Exception as e:
+        duration_ms = (time.time() - start_time) * 1000
+        logger.error(f"[TIMING] [REQ:{request_id}] Error serving audio for UUID '{original_uuid}' (cleaned: '{doc_uuid_clean}'): {str(e)} after {duration_ms:.2f}ms")
+        import traceback
+        traceback.print_exc()
+        return f"Error: {str(e)}", 500
+
 @bp.route('/audio/<path:filename>')
 @login_required
 def serve_audio(filename):
     request_id = str(uuid.uuid4())[:8]
     start_time = time.time()
-    
+
     logger.info(f"[TIMING] [REQ:{request_id}] Audio request received for: {filename}")
-    
+
     try:
         # Resolve the audio file path
         audio_path = resolve_audio_path(filename)
         if not audio_path:
             logger.error(f"[TIMING] [REQ:{request_id}] Audio file not found for: {filename}")
             return f"Audio file not found for {filename}", 404
-            
+
         logger.debug(f"[TIMING] [REQ:{request_id}] Found audio file: {audio_path}")
         return send_range_file(audio_path, request_id)
-        
+
     except Exception as e:
         duration_ms = (time.time() - start_time) * 1000
         logger.error(f"[TIMING] [REQ:{request_id}] Error serving audio file {filename}: {str(e)} after {duration_ms:.2f}ms")
