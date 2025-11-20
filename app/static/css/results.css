@@ -468,4 +468,312 @@ audio {
 /* Apply a stronger shadow when header is in sticky position */
 .source-header.is-sticky {
     box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+}
+
+/* ============================================================
+   Filter Panel Styles
+   ============================================================ */
+
+/* Results container with side panel layout */
+.results-container {
+    display: flex;
+    gap: 1.5rem;
+    align-items: flex-start;
+    direction: rtl;
+}
+
+/* Filter Panel */
+.filter-panel {
+    width: 300px;
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    padding: 0;
+    position: sticky;
+    top: 1rem;
+    max-height: calc(100vh - 2rem);
+    overflow-y: auto;
+    transition: transform 0.3s ease, opacity 0.3s ease;
+    flex-shrink: 0;
+}
+
+.filter-panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem 1.5rem;
+    border-bottom: 1px solid #e2e8f0;
+    background: #f7fafc;
+    border-radius: 12px 12px 0 0;
+}
+
+.filter-panel-header h2 {
+    margin: 0;
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: #2d3748;
+}
+
+.filter-panel-toggle {
+    background: none;
+    border: none;
+    font-size: 1.5rem;
+    color: #718096;
+    cursor: pointer;
+    padding: 0;
+    width: 2rem;
+    height: 2rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    transition: background-color 0.2s;
+}
+
+.filter-panel-toggle:hover {
+    background-color: #e2e8f0;
+    color: #2d3748;
+}
+
+.filter-panel-content {
+    padding: 1.5rem;
+}
+
+/* Filter Sections */
+.filter-section {
+    margin-bottom: 2rem;
+}
+
+.filter-section:last-child {
+    margin-bottom: 0;
+}
+
+.filter-section h3 {
+    margin: 0 0 1rem 0;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #4a5568;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* Date Inputs */
+.filter-date-inputs {
+    margin-bottom: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.filter-date-inputs label {
+    font-size: 0.9rem;
+    color: #4a5568;
+    font-weight: 500;
+}
+
+.filter-date-input {
+    width: 100%;
+    padding: 0.6rem;
+    border: 2px solid #e2e8f0;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    font-family: inherit;
+    transition: border-color 0.2s;
+    direction: rtl;
+}
+
+.filter-date-input:focus {
+    outline: none;
+    border-color: #4299e1;
+}
+
+/* Source Filter List */
+.filter-sources-list {
+    max-height: 400px;
+    overflow-y: auto;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    padding: 0.5rem;
+}
+
+.filter-source-item {
+    display: flex;
+    align-items: center;
+    padding: 0.6rem;
+    border-radius: 4px;
+    transition: background-color 0.2s;
+    cursor: pointer;
+}
+
+.filter-source-item:hover {
+    background-color: #f7fafc;
+}
+
+.filter-source-item input[type="checkbox"] {
+    margin-left: 0.75rem;
+    width: 1.1rem;
+    height: 1.1rem;
+    cursor: pointer;
+    accent-color: #4299e1;
+}
+
+.filter-source-item label {
+    flex: 1;
+    cursor: pointer;
+    font-size: 0.9rem;
+    color: #2d3748;
+    margin: 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.filter-source-count {
+    font-size: 0.85rem;
+    color: #718096;
+    background: #edf2f7;
+    padding: 0.2rem 0.5rem;
+    border-radius: 12px;
+    margin-right: 0.5rem;
+}
+
+.filter-loading {
+    padding: 1rem;
+    text-align: center;
+    color: #718096;
+    font-size: 0.9rem;
+}
+
+/* Active Filters Indicator */
+.active-filters-indicator {
+    background: #ebf8ff;
+    border: 1px solid #bee3f8;
+    border-radius: 6px;
+    padding: 0.75rem;
+    margin-bottom: 1rem;
+    text-align: center;
+    font-size: 0.9rem;
+    color: #2c5282;
+}
+
+.active-filters-indicator span {
+    font-weight: 600;
+}
+
+/* Clear Filters Button */
+.btn-clear-filters {
+    width: 100%;
+    background-color: #edf2f7;
+    color: #4a5568;
+    padding: 0.75rem;
+    border: none;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn-clear-filters:hover {
+    background-color: #e2e8f0;
+    color: #2d3748;
+}
+
+/* Results Main Area */
+.results-main {
+    flex: 1;
+    min-width: 0; /* Allows flex item to shrink below content size */
+}
+
+.results-main .export-controls {
+    display: flex;
+    gap: 1rem;
+    justify-content: flex-end;
+    margin-bottom: 1rem;
+    align-items: center;
+}
+
+.btn-filter-toggle {
+    background-color: #edf2f7;
+    color: #4a5568;
+    padding: 0.75rem 1.5rem;
+    border: none;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+}
+
+.btn-filter-toggle:hover {
+    background-color: #e2e8f0;
+    color: #2d3748;
+}
+
+/* Filtered State */
+.source-group.filtered {
+    display: none !important;
+}
+
+/* Filtered Empty State */
+.filtered-empty-state {
+    text-align: center;
+    padding: 3rem 2rem;
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    margin-top: 2rem;
+}
+
+.filtered-empty-state p {
+    font-size: 1.1rem;
+    color: #718096;
+    margin-bottom: 1.5rem;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .results-container {
+        flex-direction: column;
+    }
+
+    .filter-panel {
+        width: 100%;
+        position: fixed;
+        top: 0;
+        right: 0;
+        left: 0;
+        bottom: 0;
+        z-index: 1000;
+        max-height: 100vh;
+        border-radius: 0;
+        transform: translateX(100%);
+    }
+
+    .filter-panel.open {
+        transform: translateX(0);
+    }
+
+    .results-main {
+        width: 100%;
+    }
+}
+
+/* Hide filter panel by default on mobile, show toggle button */
+@media (max-width: 768px) {
+    .filter-panel:not(.open) {
+        display: none;
+    }
+}
+
+/* Desktop: Hide toggle button, show panel by default */
+@media (min-width: 769px) {
+    #filter-panel-open {
+        display: none;
+    }
+    
+    .filter-panel-toggle {
+        display: none;
+    }
 } 

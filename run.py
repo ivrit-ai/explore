@@ -107,7 +107,9 @@ if not json_dir.is_dir():
 app = init_app(str(data_root))
 with app.app_context():
     file_records = init_file_service(json_dir, audio_dir)
-    file_records = file_records[:10] #DEBUG
+    # file_records = file_records[:10]
+    import random
+    file_records = random.sample(file_records, min(100, len(file_records))) #DEBUG: pick random 100 files
     from app import init_index_manager
     index_manager = init_index_manager(
         app,

@@ -121,6 +121,68 @@ def search():
                            pagination=pagination,
                            max_results_per_page=per_page)
 
+@bp.route('/search/metadata')
+@login_required
+def search_metadata():
+    """Return metadata (sources and date range) for all search results."""
+    query = request.args.get('q', '').strip()
+    
+    if not query:
+        return jsonify({"error": "Missing query parameter 'q'"}), 400
+    
+    global search_service, file_records
+    if file_records is None:
+        from ..utils import get_transcripts
+        json_dir = current_app.config.get('DATA_DIR') / "json"
+        file_records = get_transcripts(json_dir)
+    if search_service is None:
+        # Get database type from environment
+        db_type = os.environ.get('DEFAULT_DB_TYPE', 'sqlite')
+        
+        search_service = SearchService(IndexManager(file_records, db_type=db_type))
+    
+    # Get ALL hits (not paginated)
+    hits = search_service.search(query)
+    
+    # Extract metadata from all hits
+    sources = defaultdict(int)  # source -> count
+    dates = []  # list of all dates
+    
+    index = search_service._index_mgr.get()
+    for h in hits:
+        doc_info = index.get_document_info(h.episode_idx)
+        source = doc_info.get("source", "")
+        episode_date = doc_info.get("episode_date", "")
+        
+        if source:
+            sources[source] += 1
+        
+        if episode_date:
+            try:
+                # Parse date to validate and normalize
+                from datetime import datetime
+                date_obj = datetime.strptime(episode_date, "%Y-%m-%d")
+                dates.append(episode_date)  # Keep as string for JSON
+            except (ValueError, TypeError):
+                # Skip invalid dates
+                pass
+    
+    # Convert sources dict to regular dict for JSON
+    sources_dict = dict(sources)
+    
+    # Find min and max dates
+    date_range = {"min": None, "max": None}
+    if dates:
+        dates_sorted = sorted(dates)  # Sort as strings (YYYY-MM-DD format)
+        date_range["min"] = dates_sorted[0]
+        date_range["max"] = dates_sorted[-1]
+    
+    return jsonify({
+        "sources": sources_dict,
+        "date_range": date_range,
+        "total_results": len(hits)
+    })
+
 @bp.route('/privacy')
 def privacy_policy():
     # Track page view

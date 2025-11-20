@@ -39,7 +39,7 @@
 {# ―― general stats ―― #}
 <div class="stats">
   {% if pagination.total_results > 0 %}
-    מציג {{ pagination.total_results }} תוצאות
+    <span id="filtered-stats">מציג {{ pagination.total_results }} תוצאות</span>
   {% else %}
     לא נמצאו תוצאות
   {% endif %}
@@ -55,17 +55,60 @@
    Search results
 # ───────────────────────────────────────────── #}
 {% if results %}
-<div class="export-controls">
-  <a href="{{ url_for('export.export_results_csv', query=query) }}"
-     class="btn btn-primary">ייצא את כל התוצאות ל-CSV</a>
-</div>
+<div class="results-container">
+  {# ―― Side Panel for Filters ―― #}
+  <aside id="filter-panel" class="filter-panel">
+    <div class="filter-panel-header">
+      <h2>סינון תוצאות</h2>
+      <button id="filter-panel-toggle" class="filter-panel-toggle" aria-label="סגור/פתח פאנל סינון">×</button>
+    </div>
+    
+    <div class="filter-panel-content">
+      {# Date Range Filter #}
+      <div class="filter-section">
+        <h3>תאריכים</h3>
+        <div class="filter-date-inputs">
+          <label for="filter-date-from">מתאריך:</label>
+          <input type="date" id="filter-date-from" class="filter-date-input">
+        </div>
+        <div class="filter-date-inputs">
+          <label for="filter-date-to">עד תאריך:</label>
+          <input type="date" id="filter-date-to" class="filter-date-input">
+        </div>
+      </div>
 
-<div class="results">
+      {# Source Filter #}
+      <div class="filter-section">
+        <h3>מקורות</h3>
+        <div id="filter-sources" class="filter-sources-list">
+          <div class="filter-loading">טוען מקורות...</div>
+        </div>
+      </div>
+
+      {# Active Filters Indicator #}
+      <div id="active-filters-indicator" class="active-filters-indicator" style="display: none;">
+        <span id="active-filters-count">0</span> מסננים פעילים
+      </div>
+
+      {# Clear Filters Button #}
+      <button id="clear-filters-btn" class="btn btn-clear-filters" style="display: none;">נקה כל המסננים</button>
+    </div>
+  </aside>
+
+  {# ―― Main Content Area ―― #}
+  <div class="results-main">
+    <div class="export-controls">
+      <button id="filter-panel-open" class="btn btn-filter-toggle">סינון תוצאות</button>
+      <a href="{{ url_for('export.export_results_csv', query=query) }}"
+         class="btn btn-primary">ייצא את כל התוצאות ל-CSV</a>
+    </div>
+
+    <div class="results">
 
   {# group the flat results list by 'source' (== recording ID) #}
   {% for group in results %}
   {% set group_id = 'group-' ~ loop.index %}
-  <div class="source-group">
+  <div class="source-group" data-source="{{ group.source }}" data-episode-date="{{ group.episode_date }}">
 
     <div class="source-header"
       onclick='toggleSource("{{ group_id }}")'>
@@ -121,7 +164,15 @@
 
   </div>      {# /.source-group #}
   {% endfor %}
-</div>          {# /.results #}
+    </div>          {# /.results #}
+
+    {# Empty state when filters hide all results #}
+    <div id="filtered-empty-state" class="filtered-empty-state" style="display: none;">
+      <p>לא נמצאו תוצאות התואמות למסננים שנבחרו</p>
+      <button onclick="clearFilters()" class="btn btn-primary">נקה מסננים</button>
+    </div>
+  </div>  {# /.results-main #}
+</div>  {# /.results-container #}
 
 {% else %}
 <p class="no-results">לא נמצאו תוצאות</p>
@@ -137,7 +188,10 @@
 # ──────────────────────────────────────────────── #}
 {% block scripts %}
 <script src="{{ url_for('static', filename='js/results.js') }}"></script>
+<script src="{{ url_for('static', filename='js/filters.js') }}"></script>
 <script>
+// Pass total results to JavaScript
+window.PAGINATION_TOTAL_RESULTS = {{ pagination.total_results|default(0) }};
 function toggleSource(sourceId) {
   const resultsDiv  = document.getElementById(sourceId + '-results');
   const icon        = document.getElementById('icon-' + sourceId);
