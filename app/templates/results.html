@@ -66,7 +66,8 @@
   {% for group in results %}
   <div class="source-group">
 
-    <div class="source-header" onclick="toggleSource('{{ group.episode|tojson }}')">
+    <div class="source-header" 
+      onclick="toggleSource({{ group.episode|tojson }})">
       <span class="toggle-icon" id="icon-{{ group.episode }}">▶</span>
     
       <!-- put all textual meta in one wrapper so Flex/Grid can treat it as a unit -->
