@@ -31,7 +31,8 @@ def home():
 @track_performance('search_executed', include_args=['query', 'page'])
 def search():
     query      = request.args.get('q', '').strip()
-    per_page   = int(request.args.get('max_results_per_page', 100))
+    per_page   = int(request.args.get('max_results_per_page', 1000))
+    per_page   = min(per_page, 5000)  # Cap at 5000
     page       = max(1, int(request.args.get('page', 1)))
     start_time = time.time()
 

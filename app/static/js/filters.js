@@ -20,7 +20,7 @@ function getUrlParams() {
         dateTo: urlParams.get('date_to') || '',
         sources: urlParams.get('sources') || '',
         page: urlParams.get('page') || '1',
-        maxResults: urlParams.get('max_results_per_page') || '100'
+        maxResults: urlParams.get('max_results_per_page') || '1000'
     };
 }
 

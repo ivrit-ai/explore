@@ -30,7 +30,7 @@
     <div class="input-container">
       <label for="max-results">תוצאות לעמוד:</label>
       <input type="number" name="max_results_per_page" id="max-results"
-             value="{{ max_results_per_page|default(100) }}" min="1" max="1000">
+             value="{{ max_results_per_page|default(1000) }}" min="1" max="5000">
     </div>
   </div>
   <button type="submit">חיפוש</button>
