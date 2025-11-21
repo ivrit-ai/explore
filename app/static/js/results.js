@@ -7,7 +7,7 @@
 //       data-char     char_offset (int)
 //       data-seg      segment_idx (int)  – first segment (already known)
 //       data-start    start_sec   (float)
-//   • A single audio file per recording lives at /audio/<id>.opus
+//   • Audio files are served via UUID at /audio/<uuid>.opus
 //   • The server exposes:
 //       GET /search/segment?episode_idx&char_offset
 //       GET /search/segment/by_idx?episode_idx&seg_idx
@@ -64,7 +64,7 @@ function loadAudio(placeholder) {
     const start = parseFloat(placeholder.dataset.start) || 0;
     const end = parseFloat(placeholder.dataset.end) || 0;
 
-    const audioUrl = `/audio/uuid/${encodeURIComponent(docUuid)}.${fmt}#t=${start}`;
+    const audioUrl = `/audio/${encodeURIComponent(docUuid)}.${fmt}#t=${start}`;
     const playerId = `audio-${docUuid}-${start}`;
 
     const cont  = document.createElement('div');
@@ -389,7 +389,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const segIdx = parseInt(item.dataset.segId) || 0;
         const playerId = `audio-hit-${index}`;
 
-        const audioUrl = `/audio/uuid/${encodeURIComponent(docUuid)}.opus#t=${start}`;
+        const audioUrl = `/audio/${encodeURIComponent(docUuid)}.opus#t=${start}`;
 
         const audioContainer = document.createElement('div');
         audioContainer.className = 'audio-container';

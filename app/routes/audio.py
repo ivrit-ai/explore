@@ -121,7 +121,7 @@ def send_range_file(path, request_id=None):
     
     return resp
 
-@bp.route('/audio/uuid/<doc_uuid>')
+@bp.route('/audio/<path:doc_uuid>')
 @login_required
 @track_audio_request
 def serve_audio_by_uuid(doc_uuid, request_id=None):
