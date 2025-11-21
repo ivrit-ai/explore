@@ -8,9 +8,39 @@ import time
 import logging
 import uuid
 import glob
+from functools import wraps
 
 bp = Blueprint('audio', __name__)
 logger = logging.getLogger(__name__)
+
+def track_audio_request(func):
+    """Decorator to track timing and logging for audio requests"""
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        request_id = str(uuid.uuid4())[:8]
+        start_time = time.time()
+
+        # Log the request start
+        request_path = kwargs.get('doc_uuid') or kwargs.get('filename', 'unknown')
+        logger.info(f"[TIMING] [REQ:{request_id}] Audio request received for: {request_path}")
+
+        try:
+            # Pass request_id to the function
+            result = func(*args, request_id=request_id, **kwargs)
+
+            # Log successful completion
+            duration_ms = (time.time() - start_time) * 1000
+            logger.info(f"[TIMING] [REQ:{request_id}] Request completed successfully in {duration_ms:.2f}ms")
+
+            return result
+
+        except Exception:
+            # Log timing for failed requests (error details logged by specific handlers)
+            duration_ms = (time.time() - start_time) * 1000
+            logger.info(f"[TIMING] [REQ:{request_id}] Request completed with error in {duration_ms:.2f}ms")
+            raise
+
+    return wrapper
 
 def send_range_file(path, request_id=None):
     start_time = time.time()
@@ -20,7 +50,7 @@ def send_range_file(path, request_id=None):
     range_header = request.headers.get('Range', None)
     if not os.path.exists(path):
         if request_id:
-            logger.error(f"[TIMING] [REQ:{request_id}] File not found: {path}")
+            logger.warning(f"[TIMING] [REQ:{request_id}] File not found: {path}")
         return "File not found", 404
 
     size = os.path.getsize(path)
@@ -93,12 +123,8 @@ def send_range_file(path, request_id=None):
 
 @bp.route('/audio/uuid/<doc_uuid>')
 @login_required
-def serve_audio_by_uuid(doc_uuid):
-    request_id = str(uuid.uuid4())[:8]
-    start_time = time.time()
-
-    logger.info(f"[TIMING] [REQ:{request_id}] Audio request received for UUID: {doc_uuid}")
-
+@track_audio_request
+def serve_audio_by_uuid(doc_uuid, request_id=None):
     # Strip file extension from UUID (e.g., "uuid.opus" -> "uuid")
     # The frontend sends UUIDs with file extensions, but the database stores them without
     original_uuid = doc_uuid
@@ -118,43 +144,15 @@ def serve_audio_by_uuid(doc_uuid):
         # Resolve the audio file path
         audio_path = resolve_audio_path(episode_path)
         if not audio_path:
-            logger.error(f"[TIMING] [REQ:{request_id}] Audio file not found for episode: {episode_path}")
+            logger.warning(f"[TIMING] [REQ:{request_id}] Audio file not found for episode: {episode_path}")
             return f"Audio file not found for {episode_path}", 404
 
         logger.debug(f"[TIMING] [REQ:{request_id}] Found audio file: {audio_path}")
         return send_range_file(audio_path, request_id)
 
-    except IndexError as e:
-        logger.error(f"[TIMING] [REQ:{request_id}] UUID not found: '{original_uuid}' (cleaned: '{doc_uuid_clean}')")
+    except IndexError:
+        logger.warning(f"[TIMING] [REQ:{request_id}] UUID not found: '{original_uuid}' (cleaned: '{doc_uuid_clean}')")
         return f"UUID not found: {original_uuid}", 404
-    except Exception as e:
-        duration_ms = (time.time() - start_time) * 1000
-        logger.error(f"[TIMING] [REQ:{request_id}] Error serving audio for UUID '{original_uuid}' (cleaned: '{doc_uuid_clean}'): {str(e)} after {duration_ms:.2f}ms")
-        import traceback
-        traceback.print_exc()
-        return f"Error: {str(e)}", 500
-
-@bp.route('/audio/<path:filename>')
-@login_required
-def serve_audio(filename):
-    request_id = str(uuid.uuid4())[:8]
-    start_time = time.time()
-
-    logger.info(f"[TIMING] [REQ:{request_id}] Audio request received for: {filename}")
-
-    try:
-        # Resolve the audio file path
-        audio_path = resolve_audio_path(filename)
-        if not audio_path:
-            logger.error(f"[TIMING] [REQ:{request_id}] Audio file not found for: {filename}")
-            return f"Audio file not found for {filename}", 404
-
-        logger.debug(f"[TIMING] [REQ:{request_id}] Found audio file: {audio_path}")
-        return send_range_file(audio_path, request_id)
-
-    except Exception as e:
-        duration_ms = (time.time() - start_time) * 1000
-        logger.error(f"[TIMING] [REQ:{request_id}] Error serving audio file {filename}: {str(e)} after {duration_ms:.2f}ms")
-        import traceback
-        traceback.print_exc()
-        return f"Error: {str(e)}", 404
+    except Exception:
+        logger.exception(f"[TIMING] [REQ:{request_id}] Unexpected error serving audio for UUID '{original_uuid}' (cleaned: '{doc_uuid_clean}')")
+        return "Internal server error", 500
