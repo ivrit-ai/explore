@@ -42,83 +42,95 @@ def track_audio_request(func):
 
     return wrapper
 
+def parse_range_header(range_header, file_size):
+    """Parse HTTP Range header and return (start, end) tuple or None."""
+    if not range_header:
+        return None
+
+    m = re.search(r'bytes=(\d+)-(\d*)', range_header)
+    if not m:
+        return None
+
+    start = int(m.group(1))
+    end = int(m.group(2)) if m.group(2) else file_size - 1
+    return (start, end)
+
+
+def stream_file(path, start_byte=0, end_byte=None, chunk_size=8192):
+    """Generate file chunks. Pure I/O, no logging or protocol logic."""
+    with open(path, 'rb') as f:
+        if end_byte is not None:
+            # Range request
+            f.seek(start_byte)
+            remaining = end_byte - start_byte + 1
+            while remaining > 0:
+                chunk = f.read(min(chunk_size, remaining))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+                yield chunk
+        else:
+            # Full file
+            while True:
+                chunk = f.read(chunk_size)
+                if not chunk:
+                    break
+                yield chunk
+
+
+def build_range_response(path, file_size, content_type, byte_range):
+    """Build HTTP 206 Partial Content response."""
+    start, end = byte_range
+    length = end - start + 1
+
+    resp = Response(stream_file(path, start, end), 206, mimetype=content_type)
+    resp.headers.add('Content-Range', f'bytes {start}-{end}/{file_size}')
+    resp.headers.add('Accept-Ranges', 'bytes')
+    resp.headers.add('Content-Length', str(length))
+    return resp
+
+
+def build_full_response(path, file_size, content_type):
+    """Build HTTP 200 OK response for full file."""
+    resp = Response(stream_file(path), 200, mimetype=content_type)
+    resp.headers.add('Accept-Ranges', 'bytes')
+    resp.headers.add('Content-Length', str(file_size))
+    return resp
+
+
 def send_range_file(path, request_id=None):
+    """Serve a file with optional HTTP range support. Orchestrates parsing, streaming, and logging."""
     start_time = time.time()
-    if request_id:
-        logger.debug(f"[TIMING] [REQ:{request_id}] Starting to send file: {path}")
-    
-    range_header = request.headers.get('Range', None)
+
+    # Validate file
     if not os.path.exists(path):
         if request_id:
             logger.warning(f"[TIMING] [REQ:{request_id}] File not found: {path}")
         return "File not found", 404
 
-    size = os.path.getsize(path)
+    # Get file metadata
+    file_size = os.path.getsize(path)
     content_type = mimetypes.guess_type(path)[0] or 'application/octet-stream'
 
-    def generate_chunks():
-        chunk_size = 8192  # 8KB chunks
-        with open(path, 'rb') as f:
-            if range_header:
-                # Example Range: bytes=12345-
-                byte1, byte2 = 0, None
-                m = re.search(r'bytes=(\d+)-(\d*)', range_header)
-                if m:
-                    byte1 = int(m.group(1))
-                    if m.group(2):
-                        byte2 = int(m.group(2))
-                if byte2 is None:
-                    byte2 = size - 1
-                length = byte2 - byte1 + 1
-                
-                if request_id:
-                    logger.debug(f"[TIMING] [REQ:{request_id}] Serving range request: bytes {byte1}-{byte2}/{size}")
-                
-                f.seek(byte1)
-                remaining = length
-                while remaining > 0:
-                    chunk = f.read(min(chunk_size, remaining))
-                    if not chunk:
-                        break
-                    remaining -= len(chunk)
-                    yield chunk
-            else:
-                if request_id:
-                    logger.debug(f"[TIMING] [REQ:{request_id}] Serving full file: {size} bytes")
-                
-                while True:
-                    chunk = f.read(chunk_size)
-                    if not chunk:
-                        break
-                    yield chunk
+    # Parse range request
+    byte_range = parse_range_header(request.headers.get('Range'), file_size)
 
-    if range_header:
-        m = re.search(r'bytes=(\d+)-(\d*)', range_header)
-        if m:
-            byte1 = int(m.group(1))
-            byte2 = int(m.group(2)) if m.group(2) else size - 1
-            length = byte2 - byte1 + 1
-            
-            resp = Response(generate_chunks(), 206, mimetype=content_type)
-            resp.headers.add('Content-Range', f'bytes {byte1}-{byte2}/{size}')
-            resp.headers.add('Accept-Ranges', 'bytes')
-            resp.headers.add('Content-Length', str(length))
-            
-            if request_id:
-                duration_ms = (time.time() - start_time) * 1000
-                logger.debug(f"[TIMING] [REQ:{request_id}] Range file served in {duration_ms:.2f}ms")
-            
-            return resp
+    # Build response
+    if byte_range:
+        start, end = byte_range
+        if request_id:
+            logger.debug(f"[TIMING] [REQ:{request_id}] Serving range: bytes {start}-{end}/{file_size}")
+        resp = build_range_response(path, file_size, content_type, byte_range)
+    else:
+        if request_id:
+            logger.debug(f"[TIMING] [REQ:{request_id}] Serving full file: {file_size} bytes")
+        resp = build_full_response(path, file_size, content_type)
 
-    # No Range: return full file
-    resp = Response(generate_chunks(), 200, mimetype=content_type)
-    resp.headers.add('Accept-Ranges', 'bytes')
-    resp.headers.add('Content-Length', str(size))
-    
+    # Log completion
     if request_id:
         duration_ms = (time.time() - start_time) * 1000
-        logger.debug(f"[TIMING] [REQ:{request_id}] Full file served in {duration_ms:.2f}ms")
-    
+        logger.debug(f"[TIMING] [REQ:{request_id}] Response prepared in {duration_ms:.2f}ms")
+
     return resp
 
 @bp.route('/audio/<path:doc_uuid>')
