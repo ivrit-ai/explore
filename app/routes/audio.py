@@ -1,4 +1,4 @@
-from flask import Blueprint, send_file, current_app, request, Response
+from flask import Blueprint, send_file, current_app, request
 from ..routes.auth import login_required
 from ..utils import resolve_audio_path
 import os
@@ -6,8 +6,7 @@ import mimetypes
 import re
 import time
 import logging
-import uuid
-import glob
+import uuid as uuid_module
 from functools import wraps
 
 bp = Blueprint('audio', __name__)
@@ -17,7 +16,7 @@ def track_audio_request(func):
     """Decorator to track timing and logging for audio requests"""
     @wraps(func)
     def wrapper(*args, **kwargs):
-        request_id = str(uuid.uuid4())[:8]
+        request_id = str(uuid_module.uuid4())[:8]
         start_time = time.time()
 
         # Log the request start
@@ -42,94 +41,49 @@ def track_audio_request(func):
 
     return wrapper
 
-def parse_range_header(range_header, file_size):
-    """Parse HTTP Range header and return (start, end) tuple or None."""
-    if not range_header:
-        return None
-
-    m = re.search(r'bytes=(\d+)-(\d*)', range_header)
-    if not m:
-        return None
-
-    start = int(m.group(1))
-    end = int(m.group(2)) if m.group(2) else file_size - 1
-    return (start, end)
-
-
-def stream_file(path, start_byte=0, end_byte=None, chunk_size=8192):
-    """Generate file chunks. Pure I/O, no logging or protocol logic."""
-    with open(path, 'rb') as f:
-        if end_byte is not None:
-            # Range request
-            f.seek(start_byte)
-            remaining = end_byte - start_byte + 1
-            while remaining > 0:
-                chunk = f.read(min(chunk_size, remaining))
-                if not chunk:
-                    break
-                remaining -= len(chunk)
-                yield chunk
-        else:
-            # Full file
-            while True:
-                chunk = f.read(chunk_size)
-                if not chunk:
-                    break
-                yield chunk
-
-
-def build_range_response(path, file_size, content_type, byte_range):
-    """Build HTTP 206 Partial Content response."""
-    start, end = byte_range
-    length = end - start + 1
-
-    resp = Response(stream_file(path, start, end), 206, mimetype=content_type)
-    resp.headers.add('Content-Range', f'bytes {start}-{end}/{file_size}')
-    resp.headers.add('Accept-Ranges', 'bytes')
-    resp.headers.add('Content-Length', str(length))
-    return resp
-
-
-def build_full_response(path, file_size, content_type):
-    """Build HTTP 200 OK response for full file."""
-    resp = Response(stream_file(path), 200, mimetype=content_type)
-    resp.headers.add('Accept-Ranges', 'bytes')
-    resp.headers.add('Content-Length', str(file_size))
-    return resp
-
-
 def send_range_file(path, request_id=None):
-    """Serve a file with optional HTTP range support. Orchestrates parsing, streaming, and logging."""
+    """
+    Serve a file with HTTP range support using Werkzeug's optimized file serving.
+
+    Uses send_file which:
+    - Handles range requests automatically per RFC 7233
+    - Uses efficient C-level file I/O
+    - Doesn't block worker threads for the entire duration
+    - Supports conditional requests (If-Modified-Since, etc.)
+    """
     start_time = time.time()
 
-    # Validate file
+    # Validate file existence
     if not os.path.exists(path):
         if request_id:
             logger.warning(f"[TIMING] [REQ:{request_id}] File not found: {path}")
         return "File not found", 404
 
-    # Get file metadata
-    file_size = os.path.getsize(path)
-    content_type = mimetypes.guess_type(path)[0] or 'application/octet-stream'
+    # Log request details
+    if request_id:
+        file_size = os.path.getsize(path)
+        range_header = request.headers.get('Range')
 
-    # Parse range request
-    byte_range = parse_range_header(request.headers.get('Range'), file_size)
-
-    # Build response
-    if byte_range:
-        start, end = byte_range
-        if request_id:
-            logger.debug(f"[TIMING] [REQ:{request_id}] Serving range: bytes {start}-{end}/{file_size}")
-        resp = build_range_response(path, file_size, content_type, byte_range)
-    else:
-        if request_id:
+        if range_header:
+            logger.debug(f"[TIMING] [REQ:{request_id}] Range request: {range_header} for file size {file_size}")
+        else:
             logger.debug(f"[TIMING] [REQ:{request_id}] Serving full file: {file_size} bytes")
-        resp = build_full_response(path, file_size, content_type)
+
+    # Use Werkzeug's optimized send_file with automatic range support
+    # conditional=True enables RFC 7233 range request handling
+    # as_attachment=False serves inline (for audio playback)
+    resp = send_file(
+        path,
+        conditional=True,
+        as_attachment=False,
+        mimetype=mimetypes.guess_type(path)[0] or 'application/octet-stream'
+    )
 
     # Log completion
     if request_id:
         duration_ms = (time.time() - start_time) * 1000
-        logger.debug(f"[TIMING] [REQ:{request_id}] Response prepared in {duration_ms:.2f}ms")
+        status = resp.status_code
+        logger.debug(f"[TIMING] [REQ:{request_id}] Response prepared ({status}) in {duration_ms:.2f}ms")
 
     return resp
 
@@ -141,6 +95,14 @@ def serve_audio_by_uuid(doc_uuid, request_id=None):
     # The frontend sends UUIDs with file extensions, but the database stores them without
     original_uuid = doc_uuid
     doc_uuid_clean, ext = os.path.splitext(doc_uuid)
+
+    # Validate UUID format to prevent path traversal attacks
+    try:
+        uuid_module.UUID(doc_uuid_clean)
+    except ValueError:
+        logger.warning(f"[TIMING] [REQ:{request_id}] Invalid UUID format: '{original_uuid}'")
+        return "Invalid UUID format", 400
+
     if ext:
         logger.debug(f"[TIMING] [REQ:{request_id}] Stripped extension '{ext}' from UUID: '{original_uuid}' -> '{doc_uuid_clean}'")
     else:
