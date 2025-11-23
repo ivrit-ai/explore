@@ -185,9 +185,13 @@ aws/THIRD_PARTY_LICENSES
 
 # notebooks 
 *.ipynb
+/notebooks/
 
 CLAUDE.md
 .claude/
 
 # sqlite database
 *.sqlite
+*sqlite-shm
+*sqlite-wal
+
