@@ -93,32 +93,79 @@ class TranscriptIndex:
         ]
     
     def get_segments_by_ids(self, lookups: list[tuple[int, int]]) -> list[dict]:
-        """Get multiple segments by (doc_id, segment_id) pairs."""
+        """
+        Get multiple segments by (doc_id, segment_id) pairs.
+
+        For large batches (>100), uses a temporary table for optimal performance.
+        For small batches, uses VALUES clause for simplicity.
+        """
         if not lookups:
             return []
-        
+
         logger = logging.getLogger(__name__)
-        logger.info(f"Fetching segments by IDs: {len(lookups)} lookups")
-        
-        # Build the WHERE clause for multiple (doc_id, segment_id) pairs
-        placeholders = []
-        params = []
-        for doc_id, segment_id in lookups:
-            placeholders.append("(doc_id = ? AND segment_id = ?)")
-            params.extend([doc_id, segment_id])
-        
-        query = f"""
-            SELECT doc_id, segment_id, segment_text, avg_logprob, char_offset, start_time, end_time
-            FROM segments 
-            WHERE {' OR '.join(placeholders)}
-            ORDER BY doc_id, segment_id
-        """
-        
-        cursor = self._db.execute(query, params)
-        result = cursor.fetchall()
-        
+        logger.debug(f"Fetching segments by IDs: {len(lookups)} lookups")
+
+        # For small batches, use VALUES clause (simpler, no temp table overhead)
+        if len(lookups) <= 100:
+            # SQLite 3.8.3+ supports VALUES as a virtual table
+            placeholders = ','.join(['(?, ?)'] * len(lookups))
+            params = [val for pair in lookups for val in pair]
+
+            query = f"""
+                SELECT s.doc_id, s.segment_id, s.segment_text, s.avg_logprob,
+                       s.char_offset, s.start_time, s.end_time
+                FROM segments s
+                INNER JOIN (VALUES {placeholders}) AS t(doc_id, segment_id)
+                ON s.doc_id = t.doc_id AND s.segment_id = t.segment_id
+                ORDER BY s.doc_id, s.segment_id
+            """
+
+            cursor = self._db.execute(query, params)
+            result = cursor.fetchall()
+
+        else:
+            # For large batches, use temporary table (more efficient)
+            # Create temp table
+            self._db.execute("""
+                CREATE TEMPORARY TABLE IF NOT EXISTS temp_segment_lookups (
+                    doc_id INTEGER,
+                    segment_id INTEGER,
+                    PRIMARY KEY (doc_id, segment_id)
+                ) WITHOUT ROWID
+            """)
+
+            # Clear any existing data
+            self._db.execute("DELETE FROM temp_segment_lookups")
+
+            # Batch insert lookups (SQLite supports ~999 vars per insert)
+            BATCH_SIZE = 499  # 499 pairs = 998 parameters
+            for i in range(0, len(lookups), BATCH_SIZE):
+                batch = lookups[i:i + BATCH_SIZE]
+                placeholders = ','.join(['(?, ?)'] * len(batch))
+                params = [val for pair in batch for val in pair]
+
+                self._db.execute(
+                    f"INSERT OR IGNORE INTO temp_segment_lookups VALUES {placeholders}",
+                    params
+                )
+
+            # Single join query
+            cursor = self._db.execute("""
+                SELECT s.doc_id, s.segment_id, s.segment_text, s.avg_logprob,
+                       s.char_offset, s.start_time, s.end_time
+                FROM segments s
+                INNER JOIN temp_segment_lookups t
+                ON s.doc_id = t.doc_id AND s.segment_id = t.segment_id
+                ORDER BY s.doc_id, s.segment_id
+            """)
+
+            result = cursor.fetchall()
+
+            # Cleanup
+            self._db.execute("DELETE FROM temp_segment_lookups")
+
         logger.info(f"Fetched segments by IDs: {len(lookups)} lookups, {len(result)} results")
-        
+
         return [
             {
                 "doc_id": row[0],
@@ -432,7 +479,7 @@ class IndexManager:
         _setup_schema(db)
         
         # Use CPU count for thread pool size, but cap at 16 to avoid too many threads
-        n_threads = min(1, os.cpu_count() or 4)
+        n_threads = min(16, os.cpu_count() or 4)
         log.info(f"Building index with {n_threads} threads for {total_files} files")
         
         with ThreadPoolExecutor(max_workers=n_threads) as executor:
