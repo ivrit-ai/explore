@@ -181,3 +181,13 @@ awscliv2.zip
 aws/install
 aws/README.md
 aws/THIRD_PARTY_LICENSES
+
+
+# notebooks 
+*.ipynb
+
+CLAUDE.md
+.claude/
+
+# sqlite database
+*.sqlite
