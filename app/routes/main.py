@@ -40,7 +40,7 @@ def search():
     search_mode = request.args.get('search_mode', 'partial').strip()
     # Validate search mode
     if search_mode not in ['exact', 'partial', 'regex']:
-        search_mode = 'partial'
+        search_mode = 'exact'
 
     # Get filter parameters from request
     date_from = request.args.get('date_from', '').strip() or None
@@ -154,7 +154,7 @@ def search_metadata():
     search_mode = request.args.get('search_mode', 'partial').strip()
     # Validate search mode
     if search_mode not in ['exact', 'partial', 'regex']:
-        search_mode = 'partial'
+        search_mode = 'exact'
 
     global search_service, file_records
     if file_records is None:

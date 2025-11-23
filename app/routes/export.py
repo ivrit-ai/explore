@@ -34,7 +34,7 @@ def export_results_csv():
     search_mode = request.args.get('search_mode', 'partial').strip()
     # Validate search mode
     if search_mode not in ['exact', 'partial', 'regex']:
-        search_mode = 'partial'
+        search_mode = 'exact'
 
     # Get filter parameters
     date_from = request.args.get('date_from', '').strip() or None
