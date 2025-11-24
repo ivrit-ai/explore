@@ -97,7 +97,7 @@ def build_index(file_records, force: bool, index_file: str | None = None):
 # ---------------------------------------------------------------------------
 
 data_root = Path(args.data_dir).expanduser().resolve()
-json_dir  = data_root / "audio-v2-transcripts"
+json_dir  = data_root / "json"
 audio_dir = data_root / "audio"
 
 if not json_dir.is_dir():
@@ -107,9 +107,6 @@ if not json_dir.is_dir():
 app = init_app(str(data_root))
 with app.app_context():
     file_records = init_file_service(json_dir, audio_dir)
-    file_records = file_records[1000:20000:1000]
-    # import random
-    # file_records = random.sample(file_records, min(100, len(file_records))) #DEBUG: pick random 100 files
     from app import init_index_manager
     index_manager = init_index_manager(
         app,
