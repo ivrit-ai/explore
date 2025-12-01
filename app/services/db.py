@@ -51,16 +51,48 @@ class DatabaseService:
     
     def _register_udf(self):
         """Register user-defined functions for SQLite."""
-        def match_offsets(text, pattern):
+        def match_offsets_partial(text, pattern):
+            """Find all partial/substring matches (current behavior)."""
             if text is None or pattern is None:
                 return ""
-            
-            # Compile the pattern before using finditer
+
+            # Escape the pattern for literal matching
             compiled_pattern = regex.compile(regex.escape(pattern))
             return ','.join([str(m.start()) for m in compiled_pattern.finditer(text)])
-        
+
+        def match_offsets_exact(text, pattern):
+            """Find all exact/whole word matches using word boundaries."""
+            if text is None or pattern is None:
+                return ""
+
+            # Use word boundaries for exact word matching
+            # \b matches word boundaries (start/end of words)
+            pattern_with_boundaries = r'\b' + regex.escape(pattern) + r'\b'
+            try:
+                compiled_pattern = regex.compile(pattern_with_boundaries)
+                return ','.join([str(m.start()) for m in compiled_pattern.finditer(text)])
+            except regex.error:
+                return ""
+
+        def match_offsets_regex(text, pattern):
+            """Find all regex matches (pattern used as-is)."""
+            if text is None or pattern is None:
+                return ""
+
+            try:
+                compiled_pattern = regex.compile(pattern)
+                return ','.join([str(m.start()) for m in compiled_pattern.finditer(text)])
+            except regex.error:
+                # If regex is invalid, return empty string
+                return ""
+
         conn = self._get_connection()
-        conn.create_function("match_offsets", 2, match_offsets)
+        # Register all three match functions
+        conn.create_function("match_offsets_partial", 2, match_offsets_partial)
+        conn.create_function("match_offsets_exact", 2, match_offsets_exact)
+        conn.create_function("match_offsets_regex", 2, match_offsets_regex)
+        # Keep old function name for backwards compatibility
+        conn.create_function("match_offsets", 2, match_offsets_partial)
     
     def execute(self, sql: str, params: Optional[List[Any]] = None):
         """Execute SQL query and return cursor/result."""
@@ -73,10 +105,33 @@ class DatabaseService:
         return cursor
     
     def batch_execute(self, sql: str, params_list: List[List[Any]]):
-        """Execute SQL query with multiple parameter sets (batch insert)."""
+        """
+        Execute batch insert using true multi-row SQL VALUES for SQLite.
+        Dramatically faster than executemany for large batches.
+        """
         conn = self._get_connection()
         cursor = conn.cursor()
-        cursor.executemany(sql, params_list)
+
+        if not params_list:
+            return cursor
+
+        # Split to manageable groups (SQLite has ~999 variables limit)
+        BATCH_SIZE = 200  # safe, adjust later
+
+        for i in range(0, len(params_list), BATCH_SIZE):
+            batch = params_list[i:i + BATCH_SIZE]
+
+            # Build "(?, ?, ...), (?, ?, ...)" placeholders
+            row_placeholder = "(" + ",".join(["?"] * len(batch[0])) + ")"
+            all_placeholders = ",".join([row_placeholder] * len(batch))
+
+            final_sql = sql.replace("VALUES (?, ?, ?, ?, ?, ?, ?)", f"VALUES {all_placeholders}")
+
+            # Flatten parameters
+            flat_params = [val for row in batch for val in row]
+
+            cursor.execute(final_sql, flat_params)
+
         return cursor
     
     def commit(self) -> None:

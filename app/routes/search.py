@@ -11,13 +11,32 @@ bp = Blueprint("search", __name__, url_prefix="/search")
 @bp.route("/", methods=["GET"])
 def search():
     search_svc = current_app.config["SEARCH_SERVICE"]
-    
+
     q = request.args.get("q", "")
     if not q:
         abort(400, "missing ?q=")
     regex = bool(request.args.get("regex"))
     hits = search_svc.search(q, regex=regex)
-    return jsonify([hit.__dict__ for hit in hits])
+
+    # Enrich hits with segment and episode info
+    index = search_svc._index_mgr.get()
+    results = []
+    for h in hits:
+        seg = search_svc.segment(h)
+        doc_info = index.get_document_info(h.episode_idx)
+        results.append({
+            "episode_idx": h.episode_idx,
+            "char_offset": h.char_offset,
+            "source": doc_info.get("source", ""),
+            "episode": doc_info.get("episode", ""),
+            "episode_title": doc_info.get("episode_title", ""),
+            "episode_date": doc_info.get("episode_date", ""),
+            "segment_idx": seg.seg_idx,
+            "start_sec": seg.start_sec,
+            "end_sec": seg.end_sec,
+        })
+
+    return jsonify(results)
 
 @bp.route("/segment", methods=["POST"])
 def get_segment():

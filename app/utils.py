@@ -71,10 +71,12 @@ def resolve_audio_path(source: str) -> Optional[str]:
         return None
 
     # Construct the direct path to the audio file based on source
-    # Assuming the audio files are stored as: audio_dir/source/source.opus
-
-    source = source.split('/')
-    audio_path = os.path.join(audio_dir, *source)
+    # Audio files are stored as: audio_dir/source/episode.opus
+    source_parts = source.split('/')
+    audio_path = os.path.join(audio_dir, *source_parts)
+    
+    if not audio_path.endswith('.opus'):
+        audio_path += '.opus'
     
     # Return the path if file exists, None otherwise
     return audio_path if os.path.exists(audio_path) else None 

@@ -7,7 +7,7 @@
 //       data-char     char_offset (int)
 //       data-seg      segment_idx (int)  – first segment (already known)
 //       data-start    start_sec   (float)
-//   • A single audio file per recording lives at /audio/<id>.opus
+//   • Audio files are served via UUID at /audio/<uuid>.opus
 //   • The server exposes:
 //       GET /search/segment?episode_idx&char_offset
 //       GET /search/segment/by_idx?episode_idx&seg_idx
@@ -59,24 +59,15 @@ const audioQueue = {
 };
 
 function loadAudio(placeholder) {
-    const srcId = placeholder.dataset.source;
+    const docUuid = placeholder.dataset.uuid;
     const fmt   = placeholder.dataset.format || 'opus';
     const start = parseFloat(placeholder.dataset.start) || 0;
     const end = parseFloat(placeholder.dataset.end) || 0;
-    // Split srcId at the first slash to get source and filename
-    let source = srcId;
-    let filename = '';
-    if (srcId.includes('/')) {
-        const parts = srcId.split('/');
-        source = parts[0];
-        filename = parts.slice(1).join('/');
-    } else {
-        filename = srcId;
-    }
-    const audioUrl = `/audio/${encodeURIComponent(source)}/${encodeURIComponent(filename)}.${fmt}#t=${start}`;
-    const playerId = `audio-${srcId}-${start}`;
 
-    const cont  = document.createElement('div'); 
+    const audioUrl = `/audio/${encodeURIComponent(docUuid)}.${fmt}#t=${start}`;
+    const playerId = `audio-${docUuid}-${start}`;
+
+    const cont  = document.createElement('div');
     cont.className = 'audio-container';
     cont.dataset.playerId = playerId;
     
@@ -304,11 +295,7 @@ function playFromSourceAudio(hitIndex, startTime) {
 
     // Stop all other players
     audioManager.stop();
-    
-    // Set the start time and load the audio
-    audio.currentTime = parseFloat(startTime);
-    audio.preload = 'metadata'; // Start loading after setting the time
-    
+
     // Get all segments in the context
     const contextContainer = resultItem.querySelector('.context-container');
     if (!contextContainer) {
@@ -323,7 +310,7 @@ function playFromSourceAudio(hitIndex, startTime) {
 
     // Remove highlighting from all segments
     segments.forEach(seg => seg.classList.remove('playing-segment'));
-    
+
     // Add timeupdate listener to stop at end time and update highlighting
     const timeUpdateHandler = () => {
         // Find the currently playing segment
@@ -353,11 +340,30 @@ function playFromSourceAudio(hitIndex, startTime) {
         }
     };
     audio.addEventListener('timeupdate', timeUpdateHandler);
-    
-    // Play the audio
-    audio.play().catch(err => {
-        console.error('Error playing audio:', err);
-    });
+
+    // Function to set time and play
+    const setTimeAndPlay = () => {
+        audio.currentTime = parseFloat(startTime);
+        audio.play().catch(err => {
+            console.error('Error playing audio:', err);
+        });
+    };
+
+    // Wait for audio to be ready before playing
+    if (audio.readyState >= 2) {
+        // Audio is already loaded, can play immediately
+        setTimeAndPlay();
+    } else {
+        // Wait for audio to load
+        audio.preload = 'metadata';
+        const loadHandler = () => {
+            setTimeAndPlay();
+            audio.removeEventListener('loadedmetadata', loadHandler);
+            audio.removeEventListener('canplay', loadHandler);
+        };
+        audio.addEventListener('loadedmetadata', loadHandler);
+        audio.addEventListener('canplay', loadHandler);
+    }
 }
 
 /* ========================
@@ -376,35 +382,26 @@ document.addEventListener('DOMContentLoaded', () => {
     resultItems.forEach((item, index) => {
         // Add hit index to the result item
         item.dataset.hitIndex = index;
-        
+
         // Create audio player for this hit
-        const srcId = item.dataset.source;
+        const docUuid = item.dataset.uuid;
         const start = parseFloat(item.dataset.start) || 0;
         const segIdx = parseInt(item.dataset.segId) || 0;
         const playerId = `audio-hit-${index}`;
-        // Split srcId at the first slash to get source and filename
-        let source = srcId;
-        let filename = '';
-        if (srcId.includes('/')) {
-            const parts = srcId.split('/');
-            source = parts[0];
-            filename = parts.slice(1).join('/');
-        } else {
-            filename = srcId;
-        }
-        const audioUrl = `/audio/${encodeURIComponent(source)}/${encodeURIComponent(filename)}.opus#t=${start}`;
+
+        const audioUrl = `/audio/${encodeURIComponent(docUuid)}.opus#t=${start}`;
 
         const audioContainer = document.createElement('div');
         audioContainer.className = 'audio-container';
         audioContainer.dataset.playerId = playerId;
-        audioContainer.dataset.source = srcId;
+        audioContainer.dataset.uuid = docUuid;
         audioContainer.dataset.segId = segIdx;
 
         const audio = document.createElement('audio');
         audio.controls = true;
         audio.preload = 'none'; // Don't preload until we set the start time
         audio.id = playerId;
-        audio.dataset.source = srcId;
+        audio.dataset.uuid = docUuid;
         audio.dataset.segId = segIdx;
 
         // Set buffer limits

@@ -90,6 +90,8 @@ def init_file_service(json_dir: Path, audio_dir: Path):
 def build_index(file_records, force: bool, index_file: str | None = None):
     if force:
         log.info("--force-reindex supplied; building fresh index …")
+        if index_file and Path(index_file).exists():  
+            Path(index_file).unlink()
     return IndexManager(file_records, index_file=index_file)
 
 # ---------------------------------------------------------------------------
@@ -107,7 +109,6 @@ if not json_dir.is_dir():
 app = init_app(str(data_root))
 with app.app_context():
     file_records = init_file_service(json_dir, audio_dir)
-    print(file_records)
     from app import init_index_manager
     index_manager = init_index_manager(
         app,
