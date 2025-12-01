@@ -16,6 +16,9 @@ logger = logging.getLogger(__name__)
 
 bp = Blueprint('export', __name__)
 
+# Context segment configuration for CSV exports
+DEFAULT_CONTEXT_SEGMENTS_LENGTH = 5
+
 @bp.route('/export/results')
 @track_performance('export_csv', include_args=['query'])
 def export_results_csv():
@@ -65,7 +68,7 @@ def export_results_csv():
         seg = search_service.segment(hit)
         # For each hit, we need 5 segments before and 5 after
         context_indices = []
-        for offset in range(-5, 6):  # -5 to +5 inclusive
+        for offset in range(-DEFAULT_CONTEXT_SEGMENTS_LENGTH, DEFAULT_CONTEXT_SEGMENTS_LENGTH + 1):  # -5 to +5 inclusive
             context_idx = seg.seg_idx + offset
             if context_idx >= 0:  # Only non-negative indices
                 segments_to_fetch.append((hit.episode_idx, context_idx))
@@ -148,7 +151,7 @@ def export_results_csv():
 
     # Write column headers
     writer.writerow([
-        'Episode Index', 'Podcast Title', 'Date', 'Episode Title',
+        'Episode Index', 'Date','Source',  'Episode',
         'Text', 'Context', 'Start Time', 'End Time'
     ])
 
@@ -157,8 +160,8 @@ def export_results_csv():
         context = r.get('context', '').encode('utf-8', errors='replace').decode('utf-8')
         writer.writerow([
             r.get('episode_idx', ''),
-            r.get('podcast_title', ''),
             r.get('date', ''),
+            r.get('podcast_title', ''),
             r.get('episode_title', ''),
             text,
             context,
