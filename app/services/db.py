@@ -105,10 +105,33 @@ class DatabaseService:
         return cursor
     
     def batch_execute(self, sql: str, params_list: List[List[Any]]):
-        """Execute SQL query with multiple parameter sets (batch insert)."""
+        """
+        Execute batch insert using true multi-row SQL VALUES for SQLite.
+        Dramatically faster than executemany for large batches.
+        """
         conn = self._get_connection()
         cursor = conn.cursor()
-        cursor.executemany(sql, params_list)
+
+        if not params_list:
+            return cursor
+
+        # Split to manageable groups (SQLite has ~999 variables limit)
+        BATCH_SIZE = 200  # safe, adjust later
+
+        for i in range(0, len(params_list), BATCH_SIZE):
+            batch = params_list[i:i + BATCH_SIZE]
+
+            # Build "(?, ?, ...), (?, ?, ...)" placeholders
+            row_placeholder = "(" + ",".join(["?"] * len(batch[0])) + ")"
+            all_placeholders = ",".join([row_placeholder] * len(batch))
+
+            final_sql = sql.replace("VALUES (?, ?, ?, ?, ?, ?, ?)", f"VALUES {all_placeholders}")
+
+            # Flatten parameters
+            flat_params = [val for row in batch for val in row]
+
+            cursor.execute(final_sql, flat_params)
+
         return cursor
     
     def commit(self) -> None:

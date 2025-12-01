@@ -309,13 +309,6 @@ def _setup_schema(db: DatabaseService):
     db.execute("PRAGMA synchronous = NORMAL")
     db.execute("PRAGMA cache_size = 1000000")
 
-    # Drop existing tables if they exist (for migration to UUID schema)
-    try:
-        db.execute("DROP TABLE IF EXISTS segments")
-        db.execute("DROP TABLE IF EXISTS documents")
-    except:
-        pass
-
     # Create documents table
     db.execute("""
         CREATE TABLE documents (
@@ -467,82 +460,215 @@ class IndexManager:
         return rec_idx, rec.id, {"full": full, "segments": segments_data}, read_ms, conv_ms
 
     def _build(self) -> TranscriptIndex:
+        """
+        Optimized index builder with CHUNKED TRANSACTIONS to prevent WAL explosion,
+        NVMe throttling, and dramatic slowdowns.
+        """
+        import queue
+        import threading
+
         log = logging.getLogger("index")
         records = list(enumerate(self._file_records))
         total_files = len(records)
-        
-        # Create database service
+
+        # --- Create DB service ---
         db = DatabaseService(for_index_generation=True, **self._db_kwargs)
-        
-        # Setup schema
-        log.info("Setting up schema...")
+        log.info("Setting up empty schema...")
+
         _setup_schema(db)
-        
-        # Use CPU count for thread pool size, but cap at 16 to avoid too many threads
-        n_threads = min(16, os.cpu_count() or 4)
-        log.info(f"Building index with {n_threads} threads for {total_files} files")
-        
-        with ThreadPoolExecutor(max_workers=n_threads) as executor:
-            # Submit all jobs
-            futures = [
-                executor.submit(self._load_and_convert, rec_idx, rec)
-                for rec_idx, rec in records
+
+        # ----- DROP INDEXES BEFORE BULK INSERT -----
+        log.info("Dropping indexes before bulk insert")
+        db.execute("DROP INDEX IF EXISTS idx_segments_doc_id")
+        db.execute("DROP INDEX IF EXISTS idx_segments_segment_id")
+        db.execute("DROP INDEX IF EXISTS idx_segments_char_offset")
+        db.execute("DROP INDEX IF EXISTS idx_segments_doc_id_segment_id")
+        db.execute("DROP INDEX IF EXISTS idx_documents_uuid")
+
+        # ----- THREADPOOL FOR JSON PARSING -----
+        from concurrent.futures import ThreadPoolExecutor
+        cpu_threads = min(16, os.cpu_count() or 4)
+        log.info(f"Using {cpu_threads} threads for JSON parsing")
+
+        def load_worker(rec_idx, rec):
+            data = rec.read_json()
+            full, segments = _episode_to_string_and_segments(data)
+            episode_date, episode_title = self.split_episode(rec.id)
+            source = rec.id.rsplit('/', 1)[0]
+            doc_uuid = str(uuid.uuid4())
+
+            segment_rows = [
+                (
+                    rec_idx,
+                    s_idx,
+                    seg["text"],
+                    seg.get("avg_logprob", 0.0),
+                    seg["char_offset"],
+                    seg["start"],
+                    seg["end"],
+                )
+                for s_idx, seg in enumerate(segments)
             ]
-            
-            # Process results and insert directly into database
-            with tqdm(total=total_files, desc="Building index", unit="file") as pbar:
-                for future in futures:
-                    t_append = time.perf_counter()
-                    rec_idx, rec_id, data, read_ms, conv_ms = future.result()
-                    
-                    # Insert document directly
-                    doc_id = rec_idx
-                    
-                    # Start transaction for this document
-                    db.execute("BEGIN TRANSACTION")
-                    
-                    episode_date, episode_title = self.split_episode(rec_id)
-                    source = rec_id.rsplit('/', 1)[0]
-                    doc_uuid = str(uuid.uuid4())
-                    db.execute(
-                        """INSERT INTO documents
-                        (doc_id, uuid, source, episode, episode_date, episode_title, full_text)
+
+            document_row = (
+                rec_idx,
+                doc_uuid,
+                source,
+                rec.id,
+                episode_date,
+                episode_title,
+                full
+            )
+            return (rec_idx, document_row, segment_rows)
+
+        # ----- QUEUE + WRITER THREAD -----
+        write_queue = queue.Queue(maxsize=2000)
+        finished_producers = False
+
+        DOCS_PER_TX = 1000   # ⭐⭐ CHUNK SIZE (tune 500–2000)
+
+        def writer_thread():
+            """Single DB writer with CHUNKED TRANSACTIONS."""
+            nonlocal finished_producers
+
+            db.execute("BEGIN")   # start first transaction
+
+            docs_in_tx = 0
+            batch_docs = []
+            batch_segments = []
+
+            DOC_BATCH_SIZE = 1000
+            SEGMENT_BATCH_SIZE = 30000
+
+            while True:
+                try:
+                    item = write_queue.get(timeout=0.2)
+                except queue.Empty:
+                    if finished_producers:
+                        break
+                    continue
+
+                if item is None:
+                    break
+
+                doc_row, seg_rows = item
+
+                batch_docs.append(doc_row)
+                batch_segments.extend(seg_rows)
+                docs_in_tx += 1
+
+                # Flush docs if needed
+                if len(batch_docs) >= DOC_BATCH_SIZE:
+                    db.batch_execute(
+                        """INSERT INTO documents 
+                        (doc_id, uuid, source, episode, episode_date,
+                            episode_title, full_text)
                         VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                        [doc_id, doc_uuid, source, rec_id, episode_date, episode_title, data["full"]]
+                        batch_docs
                     )
-                    # Insert all segments for this document in one batch
-                    # Prepare batch insert for segments
-                    segment_values = []
-                    for seg_idx, seg in enumerate(data["segments"]):
-                        segment_values.append((
-                            doc_id,
-                            seg_idx,
-                            seg["text"],
-                            seg.get("avg_logprob", 0.0),
-                            seg["char_offset"],
-                            seg["start"],
-                            seg["end"]
-                        ))
-                        
-                    # Batch insert segments
+                    batch_docs = []
+
+                # Flush segments if needed
+                if len(batch_segments) >= SEGMENT_BATCH_SIZE:
                     db.batch_execute(
                         """INSERT INTO segments 
-                            (doc_id, segment_id, segment_text, avg_logprob, char_offset, start_time, end_time) 
-                            VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                        segment_values
+                        (doc_id, segment_id, segment_text, avg_logprob,
+                            char_offset, start_time, end_time)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                        batch_segments
                     )
-                    
-                    # Commit transaction for this document
+                    batch_segments = []
+
+                # ⭐⭐ CHUNKED TRANSACTION: commit every N docs
+                if docs_in_tx >= DOCS_PER_TX:
+                    # Flush pending rows
+                    if batch_docs:
+                        db.batch_execute(
+                            """INSERT INTO documents 
+                            (doc_id, uuid, source, episode, episode_date,
+                                episode_title, full_text)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                            batch_docs
+                        )
+                        batch_docs = []
+
+                    if batch_segments:
+                        db.batch_execute(
+                            """INSERT INTO segments 
+                            (doc_id, segment_id, segment_text, avg_logprob,
+                                char_offset, start_time, end_time)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                            batch_segments
+                        )
+                        batch_segments = []
+
+                    # Commit and start fresh TX
                     db.commit()
-                    
-                    append_ms = (time.perf_counter() - t_append) * 1000
-                    total_ms = read_ms + conv_ms + append_ms
-                    
+                    db.execute("BEGIN")
+                    docs_in_tx = 0
+
+            # ----- FINAL FLUSH & COMMIT -----
+            if batch_docs:
+                db.batch_execute(
+                    """INSERT INTO documents 
+                    (doc_id, uuid, source, episode, episode_date,
+                        episode_title, full_text)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    batch_docs
+                )
+
+            if batch_segments:
+                db.batch_execute(
+                    """INSERT INTO segments 
+                    (doc_id, segment_id, segment_text, avg_logprob,
+                        char_offset, start_time, end_time)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    batch_segments
+                )
+
+            db.commit()  # final commit
+
+        # Start writer thread
+        writer = threading.Thread(target=writer_thread)
+        writer.start()
+
+        # ----- PRODUCE JSON PARSED ROWS -----
+        log.info(f"Parsing & queueing {total_files} files...")
+        with ThreadPoolExecutor(max_workers=cpu_threads) as pool:
+            futures = [pool.submit(load_worker, i, rec) for i, rec in records]
+
+            from tqdm.auto import tqdm
+            with tqdm(total=total_files, desc="Building index", unit="file") as pbar:
+                for fut in futures:
+                    rec_idx, document_row, segment_rows = fut.result()
+                    write_queue.put((document_row, segment_rows))
                     pbar.update(1)
-                
+
+        finished_producers = True
+        writer.join()
+
+        # ----- RECREATE INDEXES -----
+        log.info("Recreating indexes (fast bulk build)...")
+
+        db.execute("""CREATE INDEX idx_segments_doc_id
+                    ON segments(doc_id)""")
+
+        db.execute("""CREATE INDEX idx_segments_segment_id
+                    ON segments(segment_id)""")
+
+        db.execute("""CREATE INDEX idx_segments_char_offset
+                    ON segments(char_offset)""")
+
+        db.execute("""CREATE INDEX idx_segments_doc_id_segment_id
+                    ON segments(doc_id, segment_id)""")
+
+        db.execute("""CREATE INDEX idx_documents_uuid
+                    ON documents(uuid)""")
+
         log.info(f"Index built successfully: {total_files} documents")
-        
+
         return TranscriptIndex(db)
+
 
 # helper converts Kaldi-style or plain list JSON to a single string and segments
 def _episode_to_string_and_segments(data: dict | list) -> tuple[str, list[dict]]:
