@@ -338,27 +338,27 @@ def _setup_schema(db: DatabaseService):
 
     # Create indexes for better performance
     db.execute("""
-        CREATE INDEX IF NOT EXISTS idx_segments_doc_id
+        CREATE INDEX idx_segments_doc_id
         ON segments(doc_id)
     """)
 
     db.execute("""
-        CREATE INDEX IF NOT EXISTS idx_segments_segment_id
+        CREATE INDEX idx_segments_segment_id
         ON segments(segment_id)
     """)
 
     db.execute("""
-        CREATE INDEX IF NOT EXISTS idx_segments_char_offset
+        CREATE INDEX idx_segments_char_offset
         ON segments(char_offset)
     """)
     
     db.execute("""
-        CREATE INDEX IF NOT EXISTS idx_segments_doc_id_segment_id
+        CREATE INDEX idx_segments_doc_id_segment_id
         ON segments(doc_id, segment_id)
     """)
 
     db.execute("""
-        CREATE INDEX IF NOT EXISTS idx_documents_uuid
+        CREATE INDEX idx_documents_uuid
         ON documents(uuid)
     """)
 
