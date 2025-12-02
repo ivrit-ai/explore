@@ -24,14 +24,14 @@ Yanir Marmor, Yair Lifshitz, Yoad Snapir, and Kinneret Misgav. 2025. Building an
                 <label class="search-mode-label">סוג חיפוש:</label>
                 <div class="search-mode-options">
                     <label class="radio-option">
-                        <input type="radio" name="search_mode" value="exact">
+                        <input type="radio" name="search_mode" value="exact" checked>
                         <span>מילים שלמות</span>
-                        <span class="radio-tooltip">חיפוש מדויק של מילים שלמות בלבד (לדוגמה, "ברית" לא יתאים "עברית")</span>
+                        <span class="radio-tooltip">חיפוש מדויק של מילים שלמות בלבד (לדוגמה, "ברית" לא ימצא "עברית")</span>
                     </label>
                     <label class="radio-option">
-                        <input type="radio" name="search_mode" value="partial" checked>
+                        <input type="radio" name="search_mode" value="partial">
                         <span>התאמה חלקית</span>
-                        <span class="radio-tooltip">מחפש את המונח גם בתוך מילים (לדוגמה, "ברית" יתאים גם "עברית" וגם "חברית")</span>
+                        <span class="radio-tooltip">מחפש את המונח גם בתוך מילים (לדוגמה, "ברית" ימצא גם "עברית" וגם "חברית")</span>
                     </label>
                     <label class="radio-option">
                         <input type="radio" name="search_mode" value="regex">

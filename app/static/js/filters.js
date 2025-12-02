@@ -16,7 +16,7 @@ function getUrlParams() {
     const urlParams = new URLSearchParams(window.location.search);
     return {
         query: urlParams.get('q') || '',
-        searchMode: urlParams.get('search_mode') || 'partial',
+        searchMode: urlParams.get('search_mode') || 'exact',
         dateFrom: urlParams.get('date_from') || '',
         dateTo: urlParams.get('date_to') || '',
         sources: urlParams.get('sources') || '',
