@@ -96,8 +96,7 @@ class TranscriptIndex:
         """
         Get multiple segments by (doc_id, segment_id) pairs.
 
-        For large batches (>100), uses a temporary table for optimal performance.
-        For small batches, uses VALUES clause for simplicity.
+        Uses a temporary table for optimal performance.
         """
         if not lookups:
             return []
@@ -105,64 +104,45 @@ class TranscriptIndex:
         logger = logging.getLogger(__name__)
         logger.debug(f"Fetching segments by IDs: {len(lookups)} lookups")
 
-        # For small batches, use VALUES clause (simpler, no temp table overhead)
-        if len(lookups) <= 100:
-            # SQLite 3.8.3+ supports VALUES as a virtual table
-            placeholders = ','.join(['(?, ?)'] * len(lookups))
-            params = [val for pair in lookups for val in pair]
+        # For large batches, use temporary table (more efficient)
+        # Create temp table
+        self._db.execute("""
+            CREATE TEMPORARY TABLE IF NOT EXISTS temp_segment_lookups (
+                doc_id INTEGER,
+                segment_id INTEGER,
+                PRIMARY KEY (doc_id, segment_id)
+            ) WITHOUT ROWID
+        """)
 
-            query = f"""
-                SELECT s.doc_id, s.segment_id, s.segment_text, s.avg_logprob,
-                       s.char_offset, s.start_time, s.end_time
-                FROM segments s
-                INNER JOIN (VALUES {placeholders}) AS t(doc_id, segment_id)
-                ON s.doc_id = t.doc_id AND s.segment_id = t.segment_id
-                ORDER BY s.doc_id, s.segment_id
-            """
+        # Clear any existing data
+        self._db.execute("DELETE FROM temp_segment_lookups")
 
-            cursor = self._db.execute(query, params)
-            result = cursor.fetchall()
+        # Batch insert lookups (SQLite supports ~999 vars per insert)
+        BATCH_SIZE = 499  # 499 pairs = 998 parameters
+        for i in range(0, len(lookups), BATCH_SIZE):
+            batch = lookups[i:i + BATCH_SIZE]
+            placeholders = ','.join(['(?, ?)'] * len(batch))
+            params = [val for pair in batch for val in pair]
 
-        else:
-            # For large batches, use temporary table (more efficient)
-            # Create temp table
-            self._db.execute("""
-                CREATE TEMPORARY TABLE IF NOT EXISTS temp_segment_lookups (
-                    doc_id INTEGER,
-                    segment_id INTEGER,
-                    PRIMARY KEY (doc_id, segment_id)
-                ) WITHOUT ROWID
-            """)
+            self._db.execute(
+                f"INSERT OR IGNORE INTO temp_segment_lookups VALUES {placeholders}",
+                params
+            )
 
-            # Clear any existing data
-            self._db.execute("DELETE FROM temp_segment_lookups")
+        # Single join query
+        cursor = self._db.execute("""
+            SELECT s.doc_id, s.segment_id, s.segment_text, s.avg_logprob,
+                   s.char_offset, s.start_time, s.end_time
+            FROM segments s
+            INNER JOIN temp_segment_lookups t
+            ON s.doc_id = t.doc_id AND s.segment_id = t.segment_id
+            ORDER BY s.doc_id, s.segment_id
+        """)
 
-            # Batch insert lookups (SQLite supports ~999 vars per insert)
-            BATCH_SIZE = 499  # 499 pairs = 998 parameters
-            for i in range(0, len(lookups), BATCH_SIZE):
-                batch = lookups[i:i + BATCH_SIZE]
-                placeholders = ','.join(['(?, ?)'] * len(batch))
-                params = [val for pair in batch for val in pair]
+        result = cursor.fetchall()
 
-                self._db.execute(
-                    f"INSERT OR IGNORE INTO temp_segment_lookups VALUES {placeholders}",
-                    params
-                )
-
-            # Single join query
-            cursor = self._db.execute("""
-                SELECT s.doc_id, s.segment_id, s.segment_text, s.avg_logprob,
-                       s.char_offset, s.start_time, s.end_time
-                FROM segments s
-                INNER JOIN temp_segment_lookups t
-                ON s.doc_id = t.doc_id AND s.segment_id = t.segment_id
-                ORDER BY s.doc_id, s.segment_id
-            """)
-
-            result = cursor.fetchall()
-
-            # Cleanup
-            self._db.execute("DELETE FROM temp_segment_lookups")
+        # Cleanup
+        self._db.execute("DELETE FROM temp_segment_lookups")
 
         logger.info(f"Fetched segments by IDs: {len(lookups)} lookups, {len(result)} results")
 
