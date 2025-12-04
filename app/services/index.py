@@ -21,29 +21,37 @@ class TranscriptIndex:
     _db: DatabaseService
         
     def get_document_stats(self) -> tuple[int, int]:
-        """Get document count and total character count in a single query."""
+        """Get document count and total character count from FTS5."""
+        # Query documents count from documents table
+        cursor = self._db.execute("SELECT COUNT(*) FROM documents")
+        doc_count = cursor.fetchone()[0]
+
+        # Query total character count from FTS5
         cursor = self._db.execute("""
-            SELECT COUNT(*) as doc_count, SUM(LENGTH(full_text)) as total_chars 
-            FROM documents
+            SELECT SUM(LENGTH(full_text)) as total_chars
+            FROM documents_fts
         """)
-        result = cursor.fetchone()
-        return (result[0], result[1])
-    
+        total_chars = cursor.fetchone()[0] or 0
+
+        return (doc_count, total_chars)
+
     def get_document_text(self, doc_id: int) -> str:
-        """Get the full text of a document by its ID."""
-        cursor = self._db.execute(
-            "SELECT full_text FROM documents WHERE doc_id = ?", 
-            [doc_id]
-        )
+        """Get full text of a document from FTS5."""
+        cursor = self._db.execute("""
+            SELECT fts.full_text
+            FROM documents_fts fts
+            JOIN fts_doc_mapping m ON fts.rowid = m.fts_rowid
+            WHERE m.doc_id = ?
+        """, [doc_id])
         result = cursor.fetchone()
         if not result:
-            raise IndexError(f"Document {doc_id} not found")
+            raise IndexError(f"Document {doc_id} not found in FTS5")
         return result[0]
     
     def get_document_info(self, doc_id: int) -> dict:
-        """Get document information including source, episode, and text."""
+        """Get document information including source, episode (no full_text - use get_document_text for that)."""
         cursor = self._db.execute(
-                "SELECT doc_id, uuid, source, episode, episode_date, episode_title, full_text FROM documents WHERE doc_id = ?",
+                "SELECT doc_id, uuid, source, episode, episode_date, episode_title FROM documents WHERE doc_id = ?",
             [doc_id]
         )
         result = cursor.fetchone()
@@ -55,8 +63,7 @@ class TranscriptIndex:
             "source": result[2],
             "episode": result[3],
             "episode_date": result[4],
-            "episode_title": result[5],
-            "full_text": result[6]
+            "episode_title": result[5]
         }
 
     def get_episode_by_uuid(self, doc_uuid: str) -> str:
@@ -210,7 +217,7 @@ class TranscriptIndex:
             date_to: Optional end date filter (YYYY-MM-DD format)
             sources: Optional list of sources to filter by
         """
-        return self._search_sqlite_simple(query, search_mode, date_from, date_to, sources)
+        return self._search_fts5(query, search_mode, date_from, date_to, sources)
 
     def _search_sqlite_simple(self, query: str, search_mode: str = 'partial', date_from: Optional[str] = None,
                              date_to: Optional[str] = None, sources: Optional[list[str]] = None) -> list[tuple[int, int]]:
@@ -281,6 +288,188 @@ class TranscriptIndex:
 
         return hits
 
+    def _search_fts5(self, query: str, search_mode: str = 'partial',
+                     date_from: Optional[str] = None, date_to: Optional[str] = None,
+                     sources: Optional[list[str]] = None) -> list[tuple[int, int]]:
+        """Search using FTS5 with mode-specific strategies."""
+        log = logging.getLogger("index")
+        log.info(f"FTS5 search: query={query}, mode={search_mode}")
+
+        if search_mode == 'exact':
+            return self._search_fts5_exact(query, date_from, date_to, sources)
+        elif search_mode == 'partial':
+            return self._search_fts5_partial(query, date_from, date_to, sources)
+        elif search_mode == 'regex':
+            return self._search_fts5_regex(query, date_from, date_to, sources)
+        else:
+            raise ValueError(f"Unknown search mode: {search_mode}")
+
+    def _search_fts5_exact(self, query: str, date_from, date_to, sources):
+        """Exact word match using FTS5 phrase query."""
+        import regex
+
+        log = logging.getLogger("index")
+
+        # FTS5 phrase query: "word" matches whole tokens
+        escaped_query = query.replace('"', '""')  # Escape double quotes
+        fts_query = f'"{escaped_query}"'
+
+        # Build query with filters
+        sql = """
+            SELECT m.doc_id, fts.full_text
+            FROM documents_fts fts
+            JOIN fts_doc_mapping m ON fts.rowid = m.fts_rowid
+            JOIN documents d ON m.doc_id = d.doc_id
+            WHERE documents_fts MATCH ?
+        """
+        params = [fts_query]
+
+        # Add date filters
+        if date_from:
+            sql += " AND d.episode_date >= ?"
+            params.append(date_from)
+        if date_to:
+            sql += " AND d.episode_date <= ?"
+            params.append(date_to)
+
+        # Add source filter
+        if sources and len(sources) > 0:
+            placeholders = ','.join('?' * len(sources))
+            sql += f" AND d.source IN ({placeholders})"
+            params.extend(sources)
+
+        cursor = self._db.execute(sql, params)
+        results = cursor.fetchall()
+
+        # Extract character offsets using word boundary regex
+        hits = []
+        pattern = r'\b' + regex.escape(query) + r'\b'
+        compiled_pattern = regex.compile(pattern)
+
+        for doc_id, full_text in results:
+            for match in compiled_pattern.finditer(full_text):
+                hits.append((doc_id, match.start()))
+
+        log.info(f"Exact search completed: {len(hits)} hits from {len(results)} candidates")
+        return hits
+
+    def _search_fts5_partial(self, query: str, date_from, date_to, sources):
+        """Partial/substring match using FTS5 prefix matching."""
+        import regex
+
+        log = logging.getLogger("index")
+
+        # FTS5 prefix query for candidate narrowing
+        escaped_query = query.replace('"', '""')
+        tokens = escaped_query.split()
+        # Use OR to match any token prefix (broader candidates)
+        fts_query = ' OR '.join([f'{token}*' for token in tokens])
+
+        sql = """
+            SELECT m.doc_id, fts.full_text
+            FROM documents_fts fts
+            JOIN fts_doc_mapping m ON fts.rowid = m.fts_rowid
+            JOIN documents d ON m.doc_id = d.doc_id
+            WHERE documents_fts MATCH ?
+        """
+        params = [fts_query]
+
+        # Add filters (same as exact)
+        if date_from:
+            sql += " AND d.episode_date >= ?"
+            params.append(date_from)
+        if date_to:
+            sql += " AND d.episode_date <= ?"
+            params.append(date_to)
+        if sources and len(sources) > 0:
+            placeholders = ','.join('?' * len(sources))
+            sql += f" AND d.source IN ({placeholders})"
+            params.extend(sources)
+
+        cursor = self._db.execute(sql, params)
+        results = cursor.fetchall()
+
+        # Python substring search on candidates
+        hits = []
+        escaped_pattern = regex.escape(query)
+        compiled_pattern = regex.compile(escaped_pattern)
+
+        for doc_id, full_text in results:
+            for match in compiled_pattern.finditer(full_text):
+                hits.append((doc_id, match.start()))
+
+        log.info(f"Partial search completed: {len(hits)} hits from {len(results)} candidates")
+        return hits
+
+    def _search_fts5_regex(self, query: str, date_from, date_to, sources):
+        """Regex search with FTS5 candidate narrowing."""
+        import regex
+
+        log = logging.getLogger("index")
+
+        # Extract potential literal tokens from regex pattern
+        # Look for sequences of 2+ word characters
+        potential_tokens = regex.findall(r'\w{2,}', query)
+
+        if potential_tokens:
+            # Use first token as FTS5 filter (prefix match)
+            fts_query = f'{potential_tokens[0]}*'
+            use_fts_filter = True
+        else:
+            # No good token - fetch all documents (slow path)
+            fts_query = None
+            use_fts_filter = False
+            log.warning(f"Regex pattern '{query}' has no extractable tokens - full scan")
+
+        # Build query
+        if use_fts_filter:
+            sql = """
+                SELECT m.doc_id, fts.full_text
+                FROM documents_fts fts
+                JOIN fts_doc_mapping m ON fts.rowid = m.fts_rowid
+                JOIN documents d ON m.doc_id = d.doc_id
+                WHERE documents_fts MATCH ?
+            """
+            params = [fts_query]
+        else:
+            sql = """
+                SELECT d.doc_id, fts.full_text
+                FROM documents_fts fts
+                JOIN fts_doc_mapping m ON fts.rowid = m.fts_rowid
+                JOIN documents d ON m.doc_id = d.doc_id
+                WHERE 1=1
+            """
+            params = []
+
+        # Add filters
+        if date_from:
+            sql += " AND d.episode_date >= ?"
+            params.append(date_from)
+        if date_to:
+            sql += " AND d.episode_date <= ?"
+            params.append(date_to)
+        if sources and len(sources) > 0:
+            placeholders = ','.join('?' * len(sources))
+            sql += f" AND d.source IN ({placeholders})"
+            params.extend(sources)
+
+        cursor = self._db.execute(sql, params)
+        results = cursor.fetchall()
+
+        # Apply full regex on candidates
+        hits = []
+        try:
+            compiled_regex = regex.compile(query)
+            for doc_id, full_text in results:
+                for match in compiled_regex.finditer(full_text):
+                    hits.append((doc_id, match.start()))
+        except regex.error as e:
+            log.error(f"Invalid regex pattern: {query}, error: {e}")
+            return []
+
+        log.info(f"Regex search completed: {len(hits)} hits from {len(results)} candidates")
+        return hits
+
 
 def _setup_schema(db: DatabaseService):
     """Create the transcript database schema."""
@@ -289,22 +478,40 @@ def _setup_schema(db: DatabaseService):
     db.execute("PRAGMA synchronous = NORMAL")
     db.execute("PRAGMA cache_size = 1000000")
 
-    # Create documents table
+    # Create documents table (WITHOUT full_text - now in FTS5)
     db.execute("""
-        CREATE TABLE documents (
+        CREATE TABLE IF NOT EXISTS documents (
             doc_id INTEGER PRIMARY KEY,
             uuid VARCHAR UNIQUE NOT NULL,
             source VARCHAR,
             episode VARCHAR,
             episode_date DATE,
-            episode_title TEXT,
-            full_text TEXT
+            episode_title TEXT
+        )
+    """)
+
+    # Create FTS5 virtual table for full-text search
+    # Note: FTS5 stores both content and index (no content='' option)
+    # so we can retrieve full_text in queries
+    db.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
+            full_text,
+            tokenize='unicode61 remove_diacritics 0'
+        )
+    """)
+
+    # Create FTS5 mapping table (bridge FTS5 rowid <-> doc_id)
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS fts_doc_mapping (
+            fts_rowid INTEGER PRIMARY KEY,
+            doc_id INTEGER NOT NULL,
+            FOREIGN KEY (doc_id) REFERENCES documents(doc_id)
         )
     """)
 
     # Create segments table
     db.execute("""
-        CREATE TABLE segments (
+        CREATE TABLE IF NOT EXISTS segments (
             doc_id INTEGER,
             segment_id INTEGER,
             segment_text TEXT,
@@ -318,28 +525,43 @@ def _setup_schema(db: DatabaseService):
 
     # Create indexes for better performance
     db.execute("""
-        CREATE INDEX idx_segments_doc_id
+        CREATE INDEX IF NOT EXISTS idx_segments_doc_id
         ON segments(doc_id)
     """)
 
     db.execute("""
-        CREATE INDEX idx_segments_segment_id
+        CREATE INDEX IF NOT EXISTS idx_segments_segment_id
         ON segments(segment_id)
     """)
 
     db.execute("""
-        CREATE INDEX idx_segments_char_offset
+        CREATE INDEX IF NOT EXISTS idx_segments_char_offset
         ON segments(char_offset)
     """)
-    
+
     db.execute("""
-        CREATE INDEX idx_segments_doc_id_segment_id
+        CREATE INDEX IF NOT EXISTS idx_segments_doc_id_segment_id
         ON segments(doc_id, segment_id)
     """)
 
     db.execute("""
-        CREATE INDEX idx_documents_uuid
+        CREATE INDEX IF NOT EXISTS idx_documents_uuid
         ON documents(uuid)
+    """)
+
+    db.execute("""
+        CREATE INDEX IF NOT EXISTS idx_documents_date
+        ON documents(episode_date)
+    """)
+
+    db.execute("""
+        CREATE INDEX IF NOT EXISTS idx_documents_source
+        ON documents(source)
+    """)
+
+    db.execute("""
+        CREATE INDEX IF NOT EXISTS idx_fts_doc_mapping_doc_id
+        ON fts_doc_mapping(doc_id)
     """)
 
 
@@ -464,6 +686,10 @@ class IndexManager:
         db.execute("DROP INDEX IF EXISTS idx_segments_char_offset")
         db.execute("DROP INDEX IF EXISTS idx_segments_doc_id_segment_id")
         db.execute("DROP INDEX IF EXISTS idx_documents_uuid")
+        db.execute("DROP INDEX IF EXISTS idx_documents_date")
+        db.execute("DROP INDEX IF EXISTS idx_documents_source")
+        db.execute("DROP INDEX IF EXISTS idx_fts_doc_mapping_doc_id")
+        # Note: FTS5 manages its own indexes internally
 
         # ----- THREADPOOL FOR JSON PARSING -----
         from concurrent.futures import ThreadPoolExecutor
@@ -490,16 +716,17 @@ class IndexManager:
                 for s_idx, seg in enumerate(segments)
             ]
 
+            # Document metadata (WITHOUT full_text - will be stored in FTS5)
             document_row = (
                 rec_idx,
                 doc_uuid,
                 source,
                 rec.id,
                 episode_date,
-                episode_title,
-                full
+                episode_title
             )
-            return (rec_idx, document_row, segment_rows)
+            # Return full_text as separate 4th element for FTS5 insertion
+            return (rec_idx, document_row, segment_rows, full)
 
         # ----- QUEUE + WRITER THREAD -----
         write_queue = queue.Queue(maxsize=2000)
@@ -516,6 +743,8 @@ class IndexManager:
             docs_in_tx = 0
             batch_docs = []
             batch_segments = []
+            batch_fts = []          # FTS5 full_text entries
+            batch_mapping = []       # (fts_rowid, doc_id) pairs
 
             DOC_BATCH_SIZE = 1000
             SEGMENT_BATCH_SIZE = 30000
@@ -531,22 +760,42 @@ class IndexManager:
                 if item is None:
                     break
 
-                doc_row, seg_rows = item
+                doc_row, seg_rows, full_text = item
 
                 batch_docs.append(doc_row)
                 batch_segments.extend(seg_rows)
+                batch_fts.append(full_text)  # Store full_text for FTS5
                 docs_in_tx += 1
 
                 # Flush docs if needed
                 if len(batch_docs) >= DOC_BATCH_SIZE:
+                    # Insert documents (WITHOUT full_text)
                     db.batch_execute(
-                        """INSERT INTO documents 
-                        (doc_id, uuid, source, episode, episode_date,
-                            episode_title, full_text)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                        """INSERT INTO documents
+                        (doc_id, uuid, source, episode, episode_date, episode_title)
+                        VALUES (?, ?, ?, ?, ?, ?)""",
                         batch_docs
                     )
+
+                    # Insert into FTS5 and build mapping
+                    for idx, full_text in enumerate(batch_fts):
+                        cursor = db.execute(
+                            "INSERT INTO documents_fts(full_text) VALUES (?)",
+                            [full_text]
+                        )
+                        fts_rowid = cursor.lastrowid
+                        doc_id = batch_docs[idx][0]  # First element is doc_id
+                        batch_mapping.append((fts_rowid, doc_id))
+
+                    # Insert mappings
+                    db.batch_execute(
+                        "INSERT INTO fts_doc_mapping(fts_rowid, doc_id) VALUES (?, ?)",
+                        batch_mapping
+                    )
+
                     batch_docs = []
+                    batch_fts = []
+                    batch_mapping = []
 
                 # Flush segments if needed
                 if len(batch_segments) >= SEGMENT_BATCH_SIZE:
@@ -563,14 +812,33 @@ class IndexManager:
                 if docs_in_tx >= DOCS_PER_TX:
                     # Flush pending rows
                     if batch_docs:
+                        # Insert documents (WITHOUT full_text)
                         db.batch_execute(
-                            """INSERT INTO documents 
-                            (doc_id, uuid, source, episode, episode_date,
-                                episode_title, full_text)
-                            VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                            """INSERT INTO documents
+                            (doc_id, uuid, source, episode, episode_date, episode_title)
+                            VALUES (?, ?, ?, ?, ?, ?)""",
                             batch_docs
                         )
+
+                        # Insert into FTS5 and build mapping
+                        for idx, full_text in enumerate(batch_fts):
+                            cursor = db.execute(
+                                "INSERT INTO documents_fts(full_text) VALUES (?)",
+                                [full_text]
+                            )
+                            fts_rowid = cursor.lastrowid
+                            doc_id = batch_docs[idx][0]  # First element is doc_id
+                            batch_mapping.append((fts_rowid, doc_id))
+
+                        # Insert mappings
+                        db.batch_execute(
+                            "INSERT INTO fts_doc_mapping(fts_rowid, doc_id) VALUES (?, ?)",
+                            batch_mapping
+                        )
+
                         batch_docs = []
+                        batch_fts = []
+                        batch_mapping = []
 
                     if batch_segments:
                         db.batch_execute(
@@ -589,12 +857,28 @@ class IndexManager:
 
             # ----- FINAL FLUSH & COMMIT -----
             if batch_docs:
+                # Insert documents (WITHOUT full_text)
                 db.batch_execute(
-                    """INSERT INTO documents 
-                    (doc_id, uuid, source, episode, episode_date,
-                        episode_title, full_text)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    """INSERT INTO documents
+                    (doc_id, uuid, source, episode, episode_date, episode_title)
+                    VALUES (?, ?, ?, ?, ?, ?)""",
                     batch_docs
+                )
+
+                # Insert into FTS5 and build mapping
+                for idx, full_text in enumerate(batch_fts):
+                    cursor = db.execute(
+                        "INSERT INTO documents_fts(full_text) VALUES (?)",
+                        [full_text]
+                    )
+                    fts_rowid = cursor.lastrowid
+                    doc_id = batch_docs[idx][0]  # First element is doc_id
+                    batch_mapping.append((fts_rowid, doc_id))
+
+                # Insert mappings
+                db.batch_execute(
+                    "INSERT INTO fts_doc_mapping(fts_rowid, doc_id) VALUES (?, ?)",
+                    batch_mapping
                 )
 
             if batch_segments:
@@ -620,8 +904,8 @@ class IndexManager:
             from tqdm.auto import tqdm
             with tqdm(total=total_files, desc="Building index", unit="file") as pbar:
                 for fut in futures:
-                    rec_idx, document_row, segment_rows = fut.result()
-                    write_queue.put((document_row, segment_rows))
+                    rec_idx, document_row, segment_rows, full_text = fut.result()
+                    write_queue.put((document_row, segment_rows, full_text))
                     pbar.update(1)
 
         finished_producers = True
@@ -644,6 +928,19 @@ class IndexManager:
 
         db.execute("""CREATE INDEX idx_documents_uuid
                     ON documents(uuid)""")
+
+        db.execute("""CREATE INDEX idx_documents_date
+                    ON documents(episode_date)""")
+
+        db.execute("""CREATE INDEX idx_documents_source
+                    ON documents(source)""")
+
+        db.execute("""CREATE INDEX idx_fts_doc_mapping_doc_id
+                    ON fts_doc_mapping(doc_id)""")
+
+        # Optimize FTS5 index after bulk insert
+        log.info("Optimizing FTS5 index...")
+        db.execute("INSERT INTO documents_fts(documents_fts) VALUES('optimize')")
 
         log.info(f"Index built successfully: {total_files} documents")
 
