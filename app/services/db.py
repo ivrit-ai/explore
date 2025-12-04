@@ -37,7 +37,7 @@ class DatabaseService:
         
         # Configure SQLite parameters for better performance
         cursor = self._local.conn.cursor()
-        cursor.execute("PRAGMA cache_size = -4194304")  # 4GB cache (negative value means KB)
+        cursor.execute("PRAGMA cache_size = -524288")  # 512MB cache (negative value means KB)
         cursor.execute("PRAGMA journal_mode = WAL")
         
         # Only use memory temp store if not generating an index (to allow saving)
@@ -67,8 +67,10 @@ class DatabaseService:
         if not params_list:
             return cursor
 
-        # Split to manageable groups (SQLite has ~999 variables limit)
-        BATCH_SIZE = 200  # safe, adjust later
+        # Calculate batch size based on SQLite's 999 variable limit
+        # If each row has N parameters, we can insert floor(999/N) rows at most
+        params_per_row = len(params_list[0])
+        BATCH_SIZE = max(1, 999 // params_per_row)  # At least 1 row
 
         for i in range(0, len(params_list), BATCH_SIZE):
             batch = params_list[i:i + BATCH_SIZE]

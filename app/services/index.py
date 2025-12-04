@@ -476,7 +476,7 @@ def _setup_schema(db: DatabaseService):
     # Apply SQLite performance optimizations
     db.execute("PRAGMA journal_mode = WAL")
     db.execute("PRAGMA synchronous = NORMAL")
-    db.execute("PRAGMA cache_size = 1000000")
+    # Note: cache_size is set globally in DatabaseService connection setup
 
     # Create documents table (WITHOUT full_text - now in FTS5)
     db.execute("""
@@ -618,7 +618,7 @@ class IndexManager:
         # Apply SQLite performance optimizations for existing databases
         db.execute("PRAGMA journal_mode = WAL")
         db.execute("PRAGMA synchronous = NORMAL")
-        db.execute("PRAGMA cache_size = 1000000")
+        # Note: cache_size is set globally in DatabaseService connection setup
 
         return TranscriptIndex(db)
 
@@ -675,8 +675,16 @@ class IndexManager:
 
         # --- Create DB service ---
         db = DatabaseService(for_index_generation=True, **self._db_kwargs)
-        log.info("Setting up empty schema...")
 
+        # --- Clean up existing data to avoid duplicates/PK errors ---
+        log.info("Dropping existing tables if present...")
+        db.execute("DROP TABLE IF EXISTS segments")
+        db.execute("DROP TABLE IF EXISTS fts_doc_mapping")
+        db.execute("DROP TABLE IF EXISTS documents_fts")  # FTS5 virtual table
+        db.execute("DROP TABLE IF EXISTS documents")
+        db.commit()
+
+        log.info("Setting up empty schema...")
         _setup_schema(db)
 
         # ----- DROP INDEXES BEFORE BULK INSERT -----
