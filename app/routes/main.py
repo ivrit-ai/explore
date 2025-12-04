@@ -31,13 +31,35 @@ def home():
 @track_performance('search_executed', include_args=['query', 'page'])
 def search():
     query      = request.args.get('q', '').strip()
+
+    # Validate that query is not empty
+    if not query:
+        return render_template('results.html',
+                             query='',
+                             results=[],
+                             pagination={
+                                 'page': 1,
+                                 'per_page': 1000,
+                                 'total_pages': 1,
+                                 'total_results': 0,
+                                 'has_prev': False,
+                                 'has_next': False
+                             },
+                             max_results_per_page=1000,
+                             search_mode='exact',
+                             date_from=None,
+                             date_to=None,
+                             sources=None,
+                             sources_param='',
+                             error_message='אנא הזן מונח לחיפוש')
+
     per_page   = int(request.args.get('max_results_per_page', 1000))
     per_page   = min(per_page, 5000)  # Cap at 5000
     page       = max(1, int(request.args.get('page', 1)))
     start_time = time.time()
 
     # Get search mode parameter
-    search_mode = request.args.get('search_mode', 'partial').strip()
+    search_mode = request.args.get('search_mode', 'exact').strip()
     # Validate search mode
     if search_mode not in ['exact', 'partial', 'regex']:
         search_mode = 'exact'
@@ -151,7 +173,7 @@ def search_metadata():
         return jsonify({"error": "Missing query parameter 'q'"}), 400
 
     # Get search mode parameter
-    search_mode = request.args.get('search_mode', 'partial').strip()
+    search_mode = request.args.get('search_mode', 'exact').strip()
     # Validate search mode
     if search_mode not in ['exact', 'partial', 'regex']:
         search_mode = 'exact'
