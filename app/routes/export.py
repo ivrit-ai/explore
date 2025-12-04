@@ -24,7 +24,7 @@ DEFAULT_CONTEXT_SEGMENTS_LENGTH = 5
 def export_results_csv():
     start_time = time.time()
 
-    # Get search service from main module
+    # Get search service and cache from main module
     from ..routes import main
     search_service = main.search_service
 
@@ -34,7 +34,7 @@ def export_results_csv():
         return "Missing query parameter", 400
 
     # Get search mode parameter
-    search_mode = request.args.get('search_mode', 'partial').strip()
+    search_mode = request.args.get('search_mode', 'exact').strip()
     # Validate search mode
     if search_mode not in ['exact', 'partial', 'regex']:
         search_mode = 'exact'
@@ -49,12 +49,32 @@ def export_results_csv():
     if sources_param:
         sources = [s.strip() for s in sources_param.split(',') if s.strip()]
 
-    # Always perform a new search to get all results
-    logger.info(f"Performing new search for CSV export: {query} (mode: {search_mode}, filters: date_from={date_from}, date_to={date_to}, sources={sources})")
+    # Try to use cached search results first
+    cache_key = main.make_cache_key(query, search_mode, date_from, date_to, sources)
+    cached = main.search_cache.get(cache_key)
 
-    # Get search hits with all parameters
-    hits = search_service.search(query, search_mode=search_mode,
-                                 date_from=date_from, date_to=date_to, sources=sources)
+    if cached and (time.time() - cached['timestamp']) < main.CACHE_TTL_SECONDS:
+        # Use cached results
+        logger.info(f"Using cached search results for CSV export: {query} (mode: {search_mode})")
+        hits = cached['hits']
+    else:
+        # Cache miss or expired - perform a new search
+        logger.info(f"Cache miss - performing new search for CSV export: {query} (mode: {search_mode}, filters: date_from={date_from}, date_to={date_to}, sources={sources})")
+        hits = search_service.search(query, search_mode=search_mode,
+                                     date_from=date_from, date_to=date_to, sources=sources)
+
+        # Update cache
+        main.search_cache[cache_key] = {
+            'hits': hits,
+            'timestamp': time.time(),
+            'params': {
+                'query': query,
+                'search_mode': search_mode,
+                'date_from': date_from,
+                'date_to': date_to,
+                'sources': sources
+            }
+        }
     
     # Enrich hits with segment info
     all_results = []
