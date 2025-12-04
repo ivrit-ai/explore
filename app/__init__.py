@@ -53,7 +53,7 @@ def create_app(data_dir: str, index_file: str = None):
 
 def init_index_manager(app, file_records=None, index_file=None, force_reindex=False, **db_kwargs):
     """Initialize the index manager with the given parameters.
-    
+
     Args:
         app: Flask application instance
         file_records: Optional list of FileRecord objects
@@ -61,12 +61,27 @@ def init_index_manager(app, file_records=None, index_file=None, force_reindex=Fa
         force_reindex: Whether to force rebuilding the index
         **db_kwargs: Database-specific connection parameters
     """
+    import logging
+    log = logging.getLogger(__name__)
+
     # Set default database parameters if not provided
     if not db_kwargs:
         db_kwargs = {
             "path": os.environ.get('SQLITE_PATH', 'explore.sqlite')
         }
-    
+
+    # Handle force reindex - delete the database file
+    if force_reindex:
+        db_path = Path(db_kwargs.get('path', 'explore.sqlite'))
+        if db_path.exists():
+            log.info(f"--force-reindex: deleting existing database {db_path}")
+            db_path.unlink()
+            # Also delete WAL and SHM files if they exist
+            for suffix in ['-wal', '-shm']:
+                wal_file = Path(str(db_path) + suffix)
+                if wal_file.exists():
+                    wal_file.unlink()
+
     if index_file:
         # Load from flat index file
         index_mgr = IndexManager(index_path=index_file, **db_kwargs)
@@ -75,7 +90,7 @@ def init_index_manager(app, file_records=None, index_file=None, force_reindex=Fa
         index_mgr = IndexManager(file_records=file_records, **db_kwargs)
     else:
         raise ValueError("Either file_records or index_file must be provided")
-    
+
     app.config['SEARCH_SERVICE'] = SearchService(index_mgr)
     return index_mgr
 
