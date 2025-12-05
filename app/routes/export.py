@@ -49,32 +49,10 @@ def export_results_csv():
     if sources_param:
         sources = [s.strip() for s in sources_param.split(',') if s.strip()]
 
-    # Try to use cached search results first
-    cache_key = main.make_cache_key(query, search_mode, date_from, date_to, sources)
-    cached = main.search_cache.get(cache_key)
-
-    if cached and (time.time() - cached['timestamp']) < main.CACHE_TTL_SECONDS:
-        # Use cached results
-        logger.info(f"Using cached search results for CSV export: {query} (mode: {search_mode})")
-        hits = cached['hits']
-    else:
-        # Cache miss or expired - perform a new search
-        logger.info(f"Cache miss - performing new search for CSV export: {query} (mode: {search_mode}, filters: date_from={date_from}, date_to={date_to}, sources={sources})")
-        hits = search_service.search(query, search_mode=search_mode,
-                                     date_from=date_from, date_to=date_to, sources=sources)
-
-        # Update cache
-        main.search_cache[cache_key] = {
-            'hits': hits,
-            'timestamp': time.time(),
-            'params': {
-                'query': query,
-                'search_mode': search_mode,
-                'date_from': date_from,
-                'date_to': date_to,
-                'sources': sources
-            }
-        }
+    # Perform search with filters
+    logger.info(f"Performing search for CSV export: {query} (mode: {search_mode}, filters: date_from={date_from}, date_to={date_to}, sources={sources})")
+    hits = search_service.search(query, search_mode=search_mode,
+                                 date_from=date_from, date_to=date_to, sources=sources)
     
     # Enrich hits with segment info
     all_results = []

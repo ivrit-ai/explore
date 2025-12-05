@@ -17,16 +17,6 @@ bp = Blueprint('main', __name__)
 search_service = None
 file_records = None
 
-# Cache for search results to avoid re-running queries on export
-# Structure: {cache_key: {'hits': [...], 'timestamp': float, 'params': {...}}}
-search_cache = {}
-CACHE_TTL_SECONDS = 600  # 10 minutes
-
-def make_cache_key(query, search_mode, date_from=None, date_to=None, sources=None):
-    """Generate a cache key from search parameters."""
-    sources_key = ','.join(sorted(sources)) if sources else ''
-    return f"{query}|{search_mode}|{date_from or ''}|{date_to or ''}|{sources_key}"
-
 @bp.route('/')
 @login_required
 def home():
@@ -98,21 +88,6 @@ def search():
     hits = search_service.search(query, search_mode=search_mode, date_from=date_from,
                                 date_to=date_to, sources=sources)
     total = len(hits)
-
-    # Cache the search results for fast export
-    global search_cache
-    cache_key = make_cache_key(query, search_mode, date_from, date_to, sources)
-    search_cache[cache_key] = {
-        'hits': hits,
-        'timestamp': time.time(),
-        'params': {
-            'query': query,
-            'search_mode': search_mode,
-            'date_from': date_from,
-            'date_to': date_to,
-            'sources': sources
-        }
-    }
 
     # simple slicing
     start_i = (page - 1) * per_page
@@ -219,21 +194,6 @@ def search_metadata():
 
     # Get ALL hits (not paginated) using the specified search mode
     hits = search_service.search(query, search_mode=search_mode)
-
-    # Cache the search results for fast export (no filters applied here)
-    global search_cache
-    cache_key = make_cache_key(query, search_mode)
-    search_cache[cache_key] = {
-        'hits': hits,
-        'timestamp': time.time(),
-        'params': {
-            'query': query,
-            'search_mode': search_mode,
-            'date_from': None,
-            'date_to': None,
-            'sources': None
-        }
-    }
 
     # Extract metadata from all hits
     sources = defaultdict(int)  # source -> count
