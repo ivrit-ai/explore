@@ -35,7 +35,7 @@
           <span>מדויק</span>
         </label>
         <label class="radio-option">
-          <input type="radio" name="search_mode" value="partial" {% if search_mode == 'partial' or not search_mode %}checked{% endif %}>
+          <input type="radio" name="search_mode" value="partial" {% if search_mode == 'partial' %}checked{% endif %}>
           <span>חלקי</span>
         </label>
         <label class="radio-option">
@@ -52,6 +52,13 @@
   </div>
   <button type="submit">חיפוש</button>
 </form>
+
+{# ―― error message ―― #}
+{% if error_message %}
+<div class="error-message" style="background-color: #fff3cd; border: 1px solid #ffc107; color: #856404; padding: 1rem; margin: 1rem 0; border-radius: 4px;">
+  <strong>⚠️ {{ error_message }}</strong>
+</div>
+{% endif %}
 
 {# ―― general stats ―― #}
 <div class="stats">

@@ -1,9 +1,15 @@
 # run.py – bootstrap ivrit.ai Explore (new search pipeline 2025‑05)
 # ----------------------------------------------------------------------------
 # Usage examples:
+#   # First, build the index (one-time or when data changes):
+#   python -m app.cli build --data-dir ../data
+#
+#   # Then run the server:
 #   python run.py --data-dir ../data --dev          # http://localhost:5000
 #   python run.py --data-dir /srv/explore/data      # https + letsencrypt
-#   python run.py --force-reindex                   # drop cache & rebuild
+#
+#   # Or use auto-build for convenience (builds if DB doesn't exist):
+#   python run.py --data-dir ../data --dev --auto-build
 # ----------------------------------------------------------------------------
 
 from __future__ import annotations
@@ -26,10 +32,8 @@ from app.services.search import SearchService
 parser = argparse.ArgumentParser(description="Run ivrit.ai Explore server")
 parser.add_argument("--data-dir", default="../data",
                     help="Path holding 'json/' and 'audio/' sub‑dirs (default ../data)")
-parser.add_argument("--index-file", default=None,
-                    help="Path to custom index file (default: auto-generated in data directory)")
-parser.add_argument("--force-reindex", action="store_true",
-                    help="Rebuild in‑memory index even if it seems fresh")
+parser.add_argument("--auto-build", action="store_true",
+                    help="Automatically build index if database doesn't exist")
 parser.add_argument("--port", type=int, default=443,
                     help="Port to bind (443 for prod, 5000 dev)")
 parser.add_argument("--dev", action="store_true", help="Run in HTTP dev mode (no SSL)")
@@ -79,20 +83,13 @@ def init_app(data_dir: str):
     app = create_app(data_dir=data_dir)
     return app
 
-@timeit("Transcript scan")
-def init_file_service(json_dir: Path, audio_dir: Path):
-    file_records = get_transcripts(json_dir)
-    
-    log.info(f"Found {len(file_records)} transcript files")
-    return file_records
+@timeit("Index auto-build")
+def auto_build_index(data_dir: Path):
+    """Automatically build index if it doesn't exist."""
+    from app.cli import build_index
 
-@timeit("Index build")
-def build_index(file_records, force: bool, index_file: str | None = None):
-    if force:
-        log.info("--force-reindex supplied; building fresh index …")
-        if index_file and Path(index_file).exists():  
-            Path(index_file).unlink()
-    return IndexManager(file_records, index_file=index_file)
+    log.info("--auto-build: Building index from transcript files")
+    build_index(str(data_dir))
 
 # ---------------------------------------------------------------------------
 # 5. Wire everything up
@@ -106,18 +103,28 @@ if not json_dir.is_dir():
     log.error(f"Transcript directory not found: {json_dir}")
     sys.exit(1)
 
+# Check if database exists
+db_path = Path(os.environ.get('SQLITE_PATH', 'explore.sqlite'))
+
+if not db_path.exists():
+    if args.auto_build:
+        # Auto-build the index
+        auto_build_index(data_root)
+    else:
+        log.error(f"Database not found: {db_path}")
+        log.error("Please build the index first using: python -m app.cli build --data-dir " + args.data_dir)
+        log.error("Or use --auto-build flag to build automatically")
+        sys.exit(1)
+
 app = init_app(str(data_root))
 with app.app_context():
-    file_records = init_file_service(json_dir, audio_dir)
     from app import init_index_manager
-    index_manager = init_index_manager(
-        app,
-        file_records=file_records,
-        index_file=args.index_file,
-        force_reindex=args.force_reindex
-    )
 
-    # expose to blueprints
+    # Load index from existing database
+    index_manager = init_index_manager(app)
+
+    # Load file records for the app
+    file_records = get_transcripts(json_dir)
     app.config["FILE_RECORDS"] = file_records
 
     # make main blueprint globals match

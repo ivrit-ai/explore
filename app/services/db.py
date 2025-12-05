@@ -8,6 +8,31 @@ import regex
 import sqlite3
 
 
+def _get_sqlite_max_variable_number() -> int:
+    """
+    Query SQLite for SQLITE_MAX_VARIABLE_NUMBER at runtime.
+    Returns the actual limit or 999 (standard default) if unable to determine.
+    """
+    try:
+        conn = sqlite3.connect(":memory:")
+        try:
+            cursor = conn.execute("PRAGMA compile_options")
+            for (opt,) in cursor:
+                if opt.startswith("MAX_VARIABLE_NUMBER="):
+                    return int(opt.split("=", 1)[1])
+        finally:
+            conn.close()
+    except Exception:
+        pass
+
+    # Standard SQLite default
+    return 999
+
+
+# Query once at module load and cache the result
+SQLITE_MAX_PARAMS = _get_sqlite_max_variable_number()
+
+
 class DatabaseService:
     """Database service that abstracts operations across different database providers."""
     
@@ -37,63 +62,15 @@ class DatabaseService:
         
         # Configure SQLite parameters for better performance
         cursor = self._local.conn.cursor()
-        cursor.execute("PRAGMA cache_size = -4194304")  # 4GB cache (negative value means KB)
+        cursor.execute("PRAGMA cache_size = -524288")  # 512MB cache (negative value means KB)
         cursor.execute("PRAGMA journal_mode = WAL")
         
         # Only use memory temp store if not generating an index (to allow saving)
         if not self.for_index_generation:
             cursor.execute("PRAGMA temp_store = MEMORY")
-        
+
         self._local.conn.commit()
-        
-        # Register UDF for SQLite
-        self._register_udf()
-    
-    def _register_udf(self):
-        """Register user-defined functions for SQLite."""
-        def match_offsets_partial(text, pattern):
-            """Find all partial/substring matches (current behavior)."""
-            if text is None or pattern is None:
-                return ""
 
-            # Escape the pattern for literal matching
-            compiled_pattern = regex.compile(regex.escape(pattern))
-            return ','.join([str(m.start()) for m in compiled_pattern.finditer(text)])
-
-        def match_offsets_exact(text, pattern):
-            """Find all exact/whole word matches using word boundaries."""
-            if text is None or pattern is None:
-                return ""
-
-            # Use word boundaries for exact word matching
-            # \b matches word boundaries (start/end of words)
-            pattern_with_boundaries = r'\b' + regex.escape(pattern) + r'\b'
-            try:
-                compiled_pattern = regex.compile(pattern_with_boundaries)
-                return ','.join([str(m.start()) for m in compiled_pattern.finditer(text)])
-            except regex.error:
-                return ""
-
-        def match_offsets_regex(text, pattern):
-            """Find all regex matches (pattern used as-is)."""
-            if text is None or pattern is None:
-                return ""
-
-            try:
-                compiled_pattern = regex.compile(pattern)
-                return ','.join([str(m.start()) for m in compiled_pattern.finditer(text)])
-            except regex.error:
-                # If regex is invalid, return empty string
-                return ""
-
-        conn = self._get_connection()
-        # Register all three match functions
-        conn.create_function("match_offsets_partial", 2, match_offsets_partial)
-        conn.create_function("match_offsets_exact", 2, match_offsets_exact)
-        conn.create_function("match_offsets_regex", 2, match_offsets_regex)
-        # Keep old function name for backwards compatibility
-        conn.create_function("match_offsets", 2, match_offsets_partial)
-    
     def execute(self, sql: str, params: Optional[List[Any]] = None):
         """Execute SQL query and return cursor/result."""
         conn = self._get_connection()
@@ -115,8 +92,10 @@ class DatabaseService:
         if not params_list:
             return cursor
 
-        # Split to manageable groups (SQLite has ~999 variables limit)
-        BATCH_SIZE = 200  # safe, adjust later
+        # Calculate batch size based on SQLite's variable limit
+        # If each row has N parameters, we can insert floor(SQLITE_MAX_PARAMS/N) rows at most
+        params_per_row = len(params_list[0])
+        BATCH_SIZE = max(1, SQLITE_MAX_PARAMS // params_per_row)  # At least 1 row
 
         for i in range(0, len(params_list), BATCH_SIZE):
             batch = params_list[i:i + BATCH_SIZE]
@@ -125,7 +104,10 @@ class DatabaseService:
             row_placeholder = "(" + ",".join(["?"] * len(batch[0])) + ")"
             all_placeholders = ",".join([row_placeholder] * len(batch))
 
-            final_sql = sql.replace("VALUES (?, ?, ?, ?, ?, ?, ?)", f"VALUES {all_placeholders}")
+            # Replace VALUES clause dynamically (match any number of placeholders)
+            import re
+            # Find "VALUES (...)" pattern and replace it
+            final_sql = re.sub(r'VALUES\s*\([?,\s]+\)', f"VALUES {all_placeholders}", sql, count=1)
 
             # Flatten parameters
             flat_params = [val for row in batch for val in row]

@@ -40,10 +40,9 @@ def search():
     per_page   = int(request.args.get('max_results_per_page', 1000))
     per_page   = min(per_page, 5000)  # Cap at 5000
     page       = max(1, int(request.args.get('page', 1)))
-    start_time = time.time()
 
     # Get search mode parameter
-    search_mode = request.args.get('search_mode', 'partial').strip()
+    search_mode = request.args.get('search_mode', 'exact').strip()
     # Validate search mode
     if search_mode not in ['exact', 'partial', 'regex']:
         search_mode = 'exact'
@@ -53,6 +52,29 @@ def search():
     date_to = request.args.get('date_to', '').strip() or None
     sources_param = request.args.get('sources', '').strip()
     sources = [s.strip() for s in sources_param.split(',') if s.strip()] if sources_param else None
+
+    # Validate that query is not empty (after reading all parameters)
+    if not query:
+        return render_template('results.html',
+                             query='',
+                             results=[],
+                             pagination={
+                                 'page': page,
+                                 'per_page': per_page,
+                                 'total_pages': 1,
+                                 'total_results': 0,
+                                 'has_prev': False,
+                                 'has_next': False
+                             },
+                             max_results_per_page=per_page,
+                             search_mode=search_mode,
+                             date_from=date_from,
+                             date_to=date_to,
+                             sources=sources,
+                             sources_param=sources_param,
+                             error_message='אנא הזן מונח לחיפוש')
+
+    start_time = time.time()
 
     global search_service, file_records
     if file_records is None:
@@ -157,7 +179,7 @@ def search_metadata():
         return jsonify({"error": "Missing query parameter 'q'"}), 400
 
     # Get search mode parameter
-    search_mode = request.args.get('search_mode', 'partial').strip()
+    search_mode = request.args.get('search_mode', 'exact').strip()
     # Validate search mode
     if search_mode not in ['exact', 'partial', 'regex']:
         search_mode = 'exact'
@@ -175,7 +197,7 @@ def search_metadata():
 
     # Get ALL hits (not paginated) using the specified search mode
     hits = search_service.search(query, search_mode=search_mode)
-    
+
     # Extract metadata from all hits
     sources = defaultdict(int)  # source -> count
     dates = []  # list of all dates
