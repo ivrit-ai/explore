@@ -31,9 +31,12 @@ def home():
 @track_performance('search_executed', include_args=['query', 'page'])
 def search():
     query      = request.args.get('q', '').strip()
-
-    # Read all filter parameters from request FIRST, before validation
-    # This preserves user preferences even when query is empty
+    
+    # Block empty queries
+    if not query:
+        logger.warning("Search attempted with empty query")
+        return render_template('home.html', error="נא להזין מונח לחיפוש"), 400
+    
     per_page   = int(request.args.get('max_results_per_page', 1000))
     per_page   = min(per_page, 5000)  # Cap at 5000
     page       = max(1, int(request.args.get('page', 1)))

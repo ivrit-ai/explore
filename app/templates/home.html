@@ -17,8 +17,12 @@
 Yanir Marmor, Yair Lifshitz, Yoad Snapir, and Kinneret Misgav. 2025. Building an Accurate Open-Source Hebrew ASR System through Crowdsourcing.  Proceedings of Interspeech 2025</p>
     </div>
     
-    <form action="{{ url_for('main.search') }}" method="GET" class="search-form">
-        <input type="text" name="q" placeholder="הזן מונח לחיפוש..." autofocus>
+    {% if error %}
+    <div class="error-message">{{ error }}</div>
+    {% endif %}
+    
+    <form action="{{ url_for('main.search') }}" method="GET" class="search-form" onsubmit="return validateSearch(event)">
+        <input type="text" name="q" id="search-input" placeholder="הזן מונח לחיפוש..." autofocus required>
         <div class="search-options">
             <div class="search-mode-container">
                 <label class="search-mode-label">סוג חיפוש:</label>
@@ -122,4 +126,19 @@ Yanir Marmor, Yair Lifshitz, Yoad Snapir, and Kinneret Misgav. 2025. Building an
         </p>
     </div>
 </div>
+
+<script>
+function validateSearch(event) {
+    const input = document.getElementById('search-input');
+    const query = input.value.trim();
+    
+    if (!query) {
+        alert('נא להזין מונח לחיפוש');
+        event.preventDefault();
+        return false;
+    }
+    
+    return true;
+}
+</script>
 {% endblock %} 

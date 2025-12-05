@@ -353,4 +353,16 @@ button:hover {
     color: #718096;
     text-align: right;
     direction: rtl;
+}
+
+/* Error message */
+.error-message {
+    background-color: #fed7d7;
+    border: 1px solid #fc8181;
+    color: #c53030;
+    padding: 1rem;
+    border-radius: 8px;
+    margin-bottom: 1rem;
+    font-size: 0.95rem;
+    text-align: center;
 } 
