@@ -480,7 +480,7 @@ def _setup_schema(db: DatabaseService):
 
     # Create documents table (WITHOUT full_text - now in FTS5)
     db.execute("""
-        CREATE TABLE IF NOT EXISTS documents (
+        CREATE TABLE documents (
             doc_id INTEGER PRIMARY KEY,
             uuid VARCHAR UNIQUE NOT NULL,
             source VARCHAR,
@@ -494,7 +494,7 @@ def _setup_schema(db: DatabaseService):
     # Note: FTS5 stores both content and index (no content='' option)
     # so we can retrieve full_text in queries
     db.execute("""
-        CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
+        CREATE VIRTUAL TABLE documents_fts USING fts5(
             full_text,
             tokenize='unicode61 remove_diacritics 0'
         )
@@ -587,9 +587,7 @@ class IndexManager:
     def save_index(self, path: str | Path) -> None:
         """Save the index to a database file."""
         path = Path(path)
-        if path.suffix != '.db':
-            path = path.with_suffix('.db')
-        
+
         # For SQLite, we can copy the file directly
         import shutil
         if "path" in self._db_kwargs and self._db_kwargs["path"] != ":memory:":
@@ -606,9 +604,7 @@ class IndexManager:
         
         # Load from single file
         db_path = self._index_path
-        if db_path.suffix != '.db':
-            db_path = db_path.with_suffix('.db')
-        
+
         # Create database kwargs with the correct path
         db_kwargs = self._db_kwargs.copy()
         db_kwargs['path'] = str(db_path)

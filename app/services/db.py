@@ -7,9 +7,30 @@ import regex
 
 import sqlite3
 
-# SQLite default SQLITE_MAX_VARIABLE_NUMBER limit for bound parameters
-# This is 999 in standard builds, but can be higher in custom SQLite compilations
-SQLITE_MAX_PARAMS = 999
+
+def _get_sqlite_max_variable_number() -> int:
+    """
+    Query SQLite for SQLITE_MAX_VARIABLE_NUMBER at runtime.
+    Returns the actual limit or 999 (standard default) if unable to determine.
+    """
+    try:
+        conn = sqlite3.connect(":memory:")
+        try:
+            cursor = conn.execute("PRAGMA compile_options")
+            for (opt,) in cursor:
+                if opt.startswith("MAX_VARIABLE_NUMBER="):
+                    return int(opt.split("=", 1)[1])
+        finally:
+            conn.close()
+    except Exception:
+        pass
+
+    # Standard SQLite default
+    return 999
+
+
+# Query once at module load and cache the result
+SQLITE_MAX_PARAMS = _get_sqlite_max_variable_number()
 
 
 class DatabaseService:
