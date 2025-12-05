@@ -7,6 +7,10 @@ import regex
 
 import sqlite3
 
+# SQLite default SQLITE_MAX_VARIABLE_NUMBER limit for bound parameters
+# This is 999 in standard builds, but can be higher in custom SQLite compilations
+SQLITE_MAX_PARAMS = 999
+
 
 class DatabaseService:
     """Database service that abstracts operations across different database providers."""
@@ -67,10 +71,10 @@ class DatabaseService:
         if not params_list:
             return cursor
 
-        # Calculate batch size based on SQLite's 999 variable limit
-        # If each row has N parameters, we can insert floor(999/N) rows at most
+        # Calculate batch size based on SQLite's variable limit
+        # If each row has N parameters, we can insert floor(SQLITE_MAX_PARAMS/N) rows at most
         params_per_row = len(params_list[0])
-        BATCH_SIZE = max(1, 999 // params_per_row)  # At least 1 row
+        BATCH_SIZE = max(1, SQLITE_MAX_PARAMS // params_per_row)  # At least 1 row
 
         for i in range(0, len(params_list), BATCH_SIZE):
             batch = params_list[i:i + BATCH_SIZE]

@@ -12,7 +12,7 @@ import re
 import uuid
 
 from ..utils import FileRecord
-from .db import DatabaseService
+from .db import DatabaseService, SQLITE_MAX_PARAMS
 
 
 @dataclass(slots=True)
@@ -124,8 +124,8 @@ class TranscriptIndex:
         # Clear any existing data
         self._db.execute("DELETE FROM temp_segment_lookups")
 
-        # Batch insert lookups (SQLite supports ~999 vars per insert)
-        BATCH_SIZE = 499  # 499 pairs = 998 parameters
+        # Batch insert lookups (SQLite variable limit)
+        BATCH_SIZE = SQLITE_MAX_PARAMS // 2  # Each lookup pair = 2 parameters
         for i in range(0, len(lookups), BATCH_SIZE):
             batch = lookups[i:i + BATCH_SIZE]
             placeholders = ','.join(['(?, ?)'] * len(batch))
