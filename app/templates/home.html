@@ -54,7 +54,8 @@ Yanir Marmor, Yair Lifshitz, Yoad Snapir, and Kinneret Misgav. 2025. Building an
     </form>
 
     <div class="regex-examples">
-        <h3>דוגמאות לחיפוש Regex</h3>
+        <details>
+        <summary>דוגמאות לחיפוש Regex</summary>
         <p class="regex-note">החיפוש משתמש ב-<strong>Python regex</strong> (ספריית <code>regex</code>). תומך בכל התחביר המלא של ביטויים רגולריים.</p>
 
         <div class="examples-grid">
@@ -124,20 +125,26 @@ Yanir Marmor, Yair Lifshitz, Yoad Snapir, and Kinneret Misgav. 2025. Building an
             לחיפוש תו מיוחד, הוסף לפניו <code>\</code> (לדוגמה: <code>\.</code> למציאת נקודה ממש)<br>
             <a href="https://regex101.com/?flavor=python" target="_blank">לניסוי וניפוי באגים: regex101.com (Python flavor)</a>
         </p>
+        </details>
     </div>
+</div>
+
+<div class="search-spinner-overlay" id="searchSpinner">
+    <div class="spinner"></div>
 </div>
 
 <script>
 function validateSearch(event) {
     const input = document.getElementById('search-input');
     const query = input.value.trim();
-    
+
     if (!query) {
         alert('נא להזין מונח לחיפוש');
         event.preventDefault();
         return false;
     }
-    
+
+    document.getElementById('searchSpinner').classList.add('active');
     return true;
 }
 </script>

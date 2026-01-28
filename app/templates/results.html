@@ -212,8 +212,20 @@
    JS assets
 # ──────────────────────────────────────────────── #}
 {% block scripts %}
+<div class="search-spinner-overlay" id="searchSpinner">
+    <div class="spinner"></div>
+</div>
+
 <script src="{{ url_for('static', filename='js/results.js') }}"></script>
 <script src="{{ url_for('static', filename='js/filters.js') }}"></script>
+<script>
+document.querySelector('.search-form').addEventListener('submit', function() {
+    document.getElementById('searchSpinner').classList.add('active');
+});
+document.getElementById('apply-filters-btn').addEventListener('click', function() {
+    document.getElementById('searchSpinner').classList.add('active');
+});
+</script>
 <script>
 function toggleSource(sourceId) {
   const resultsDiv  = document.getElementById(sourceId + '-results');

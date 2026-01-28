@@ -285,6 +285,33 @@ button:hover {
     font-weight: 600;
 }
 
+.regex-examples summary {
+    color: #2d3748;
+    font-size: 1.25rem;
+    font-weight: 600;
+    cursor: pointer;
+    list-style: none;
+}
+
+.regex-examples summary::-webkit-details-marker {
+    display: none;
+}
+
+.regex-examples summary::before {
+    content: '◀ ';
+    display: inline-block;
+    font-size: 0.8rem;
+    margin-left: 0.5rem;
+}
+
+.regex-examples details[open] > summary::before {
+    content: '▼ ';
+}
+
+.regex-examples details[open] > summary {
+    margin-bottom: 1rem;
+}
+
 .regex-note {
     font-size: 0.9rem;
     color: #4a5568;
@@ -365,4 +392,32 @@ button:hover {
     margin-bottom: 1rem;
     font-size: 0.95rem;
     text-align: center;
+}
+
+/* Search spinner overlay */
+.search-spinner-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(255, 255, 255, 0.7);
+    z-index: 9999;
+    justify-content: center;
+    align-items: center;
+}
+
+.search-spinner-overlay.active {
+    display: flex;
+}
+
+.search-spinner-overlay .spinner {
+    width: 48px;
+    height: 48px;
+    border: 4px solid #e2e8f0;
+    border-top-color: #4299e1;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
 } 
