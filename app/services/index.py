@@ -2,7 +2,7 @@ from pathlib import Path
 import time
 import logging
 from dataclasses import dataclass, field
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Set
 from concurrent.futures import ThreadPoolExecutor
 import os
 from tqdm.auto import tqdm
@@ -10,9 +10,132 @@ import itertools
 from datetime import datetime
 import re
 import uuid
+import bisect
 
 from ..utils import FileRecord
 from .db import DatabaseService, SQLITE_MAX_PARAMS
+
+
+def _extract_fts5_tokens(query: str) -> list[str]:
+    """
+    Extract valid tokens from a query for use in FTS5 queries.
+
+    FTS5 interprets certain characters as operators:
+    - "-" as NOT operator
+    - "+" as required term
+    - "*" as prefix wildcard
+    - Punctuation can cause syntax errors
+
+    This function splits on punctuation and extracts word tokens.
+    E.g., "בית־ספר" becomes ["בית", "ספר"]
+          "צה״ל" becomes ["צה", "ל"]
+          "hello-world!" becomes ["hello", "world"]
+    """
+    import regex
+    # Split on any non-word character and filter empty strings
+    tokens = regex.split(r'[^\w]+', query)
+    return [t for t in tokens if t]
+
+
+def _build_ignore_punct_pattern(query: str, word_boundary: bool = False) -> str:
+    """
+    Build a regex pattern that allows optional punctuation between characters.
+
+    This handles cases like:
+    - "צהל" matching "צה״ל" (gershayim inside word)
+    - "גון" matching "ג׳ון" (geresh inside word)
+    - "1000" matching "1,000" (comma in number)
+    - "dont" matching "don't" (apostrophe)
+
+    Args:
+        query: The search query
+        word_boundary: If True, add word boundaries around the pattern
+
+    Returns:
+        Regex pattern string
+    """
+    import regex
+
+    # Split query into tokens (words separated by spaces)
+    tokens = query.split()
+
+    token_patterns = []
+    for token in tokens:
+        # For each character in the token, allow optional punctuation after it
+        # But not after the last character (that's handled by word boundary or next token)
+        chars = list(token)
+        if len(chars) == 0:
+            continue
+
+        # Build pattern: char1 + optional_punct + char2 + optional_punct + ... + charN
+        char_patterns = [regex.escape(c) for c in chars]
+        # Join with optional punctuation between each character
+        token_pattern = r'[\p{P}]*'.join(char_patterns)
+        token_patterns.append(token_pattern)
+
+    if not token_patterns:
+        return ''
+
+    # Join tokens with required punctuation/whitespace between them
+    pattern = r'[\p{P}\s]+'.join(token_patterns)
+
+    if word_boundary:
+        pattern = r'\b' + pattern + r'\b'
+
+    return pattern
+
+
+def _classify_hit_position(hit_start: int, hit_end: int, full_text: str,
+                           seg_boundaries: list[tuple[int, int]],
+                           seg_offsets: list[int]) -> set[str]:
+    """Return set of position labels for a hit: {'start', 'end', 'cross'}.
+
+    Args:
+        hit_start: Start character offset of the match in full_text
+        hit_end: End character offset of the match in full_text
+        full_text: The full document text
+        seg_boundaries: List of (char_offset, segment_length) tuples
+        seg_offsets: List of segment start offsets for binary search
+
+    Returns:
+        Set of position labels: 'start' if match starts in first word,
+        'end' if match ends in last word, 'cross' if match spans segments.
+    """
+    # Find which segment contains the hit start
+    idx = bisect.bisect_right(seg_offsets, hit_start) - 1
+    if idx < 0:
+        idx = 0
+
+    seg_offset, seg_len = seg_boundaries[idx]
+    offset_in_seg = hit_start - seg_offset
+    match_len = hit_end - hit_start
+    seg_text = full_text[seg_offset:seg_offset + seg_len]
+
+    positions = set()
+
+    # Beginning: match starts within first word
+    first_space = seg_text.find(' ')
+    if first_space == -1:
+        # Single-word segment - any hit starting at 0 is at beginning
+        if offset_in_seg == 0:
+            positions.add('start')
+    elif offset_in_seg < first_space:
+        positions.add('start')
+
+    # End: match ends within last word
+    last_space = seg_text.rfind(' ')
+    if last_space == -1:
+        # Single-word segment - match ending at or after segment length is at end
+        if offset_in_seg + match_len >= seg_len:
+            positions.add('end')
+    elif offset_in_seg + match_len > last_space:
+        positions.add('end')
+
+    # Cross-segment: match extends beyond this segment
+    if offset_in_seg + match_len > seg_len:
+        positions.add('cross')
+
+    return positions
 
 
 @dataclass(slots=True)
@@ -198,7 +321,7 @@ class TranscriptIndex:
         """Get document source by episode index (0-based)."""
         doc_id = episode_idx
         cursor = self._db.execute(
-            "SELECT source FROM documents WHERE doc_id = ?", 
+            "SELECT source FROM documents WHERE doc_id = ?",
             [doc_id]
         )
         result = cursor.fetchone()
@@ -206,9 +329,18 @@ class TranscriptIndex:
             raise IndexError(f"Document {doc_id} not found")
         return result[0]
 
+    def _get_segment_boundaries(self, doc_id: int) -> list[tuple[int, int]]:
+        """Return sorted list of (char_offset, segment_length) for a document."""
+        cursor = self._db.execute(
+            "SELECT char_offset, LENGTH(segment_text) FROM segments WHERE doc_id = ? ORDER BY char_offset",
+            [doc_id]
+        )
+        return cursor.fetchall()
+
     def search_hits(self, query: str, search_mode: str = 'partial', date_from: Optional[str] = None,
                    date_to: Optional[str] = None, sources: Optional[list[str]] = None,
-                   ignore_punct: bool = False) -> list[tuple[int, int]]:
+                   ignore_punct: bool = False,
+                   position_filters: Optional[Set[str]] = None) -> list[tuple[int, int]]:
         """Search for query and return (episode_idx, char_offset) pairs for hits.
 
         Args:
@@ -218,8 +350,9 @@ class TranscriptIndex:
             date_to: Optional end date filter (YYYY-MM-DD format)
             sources: Optional list of sources to filter by
             ignore_punct: If True, ignore punctuation between words when matching
+            position_filters: Optional set of position labels to filter by ('start', 'end', 'cross')
         """
-        return self._search_fts5(query, search_mode, date_from, date_to, sources, ignore_punct)
+        return self._search_fts5(query, search_mode, date_from, date_to, sources, ignore_punct, position_filters)
 
     def _search_sqlite_simple(self, query: str, search_mode: str = 'partial', date_from: Optional[str] = None,
                              date_to: Optional[str] = None, sources: Optional[list[str]] = None) -> list[tuple[int, int]]:
@@ -293,29 +426,37 @@ class TranscriptIndex:
     def _search_fts5(self, query: str, search_mode: str = 'partial',
                      date_from: Optional[str] = None, date_to: Optional[str] = None,
                      sources: Optional[list[str]] = None,
-                     ignore_punct: bool = False) -> list[tuple[int, int]]:
+                     ignore_punct: bool = False,
+                     position_filters: Optional[Set[str]] = None) -> list[tuple[int, int]]:
         """Search using FTS5 with mode-specific strategies."""
         log = logging.getLogger("index")
-        log.info(f"FTS5 search: query={query}, mode={search_mode}, ignore_punct={ignore_punct}")
+        log.info(f"FTS5 search: query={query}, mode={search_mode}, ignore_punct={ignore_punct}, position_filters={position_filters}")
 
         if search_mode == 'exact':
-            return self._search_fts5_exact(query, date_from, date_to, sources, ignore_punct)
+            return self._search_fts5_exact(query, date_from, date_to, sources, ignore_punct, position_filters)
         elif search_mode == 'partial':
-            return self._search_fts5_partial(query, date_from, date_to, sources, ignore_punct)
+            return self._search_fts5_partial(query, date_from, date_to, sources, ignore_punct, position_filters)
         elif search_mode == 'regex':
-            return self._search_fts5_regex(query, date_from, date_to, sources)
+            return self._search_fts5_regex(query, date_from, date_to, sources, position_filters)
         else:
             raise ValueError(f"Unknown search mode: {search_mode}")
 
-    def _search_fts5_exact(self, query: str, date_from, date_to, sources, ignore_punct: bool = False):
+    def _search_fts5_exact(self, query: str, date_from, date_to, sources, ignore_punct: bool = False,
+                           position_filters: Optional[Set[str]] = None):
         """Exact word match using FTS5 phrase query."""
         import regex
 
         log = logging.getLogger("index")
 
-        # FTS5 phrase query: "word" matches whole tokens
-        escaped_query = query.replace('"', '""')  # Escape double quotes
-        fts_query = f'"{escaped_query}"'
+        # Extract valid tokens for FTS5 query (split on punctuation)
+        fts_tokens = _extract_fts5_tokens(query)
+
+        if not fts_tokens:
+            log.warning(f"Query '{query}' has no valid tokens after extraction")
+            return []
+
+        # FTS5 phrase query: "word1 word2" matches tokens in sequence
+        fts_query = '"' + ' '.join(fts_tokens) + '"'
 
         # Build query with filters
         sql = """
@@ -347,43 +488,77 @@ class TranscriptIndex:
         # Extract character offsets using word boundary regex
         hits = []
         if ignore_punct:
-            tokens = query.split()
-            escaped_tokens = [regex.escape(t) for t in tokens]
-            inner = r'[\p{P}\s]+'.join(escaped_tokens) if len(tokens) > 1 else escaped_tokens[0]
-            pattern = r'\b' + inner + r'\b'
+            # Use pattern that allows punctuation between/within characters
+            pattern = _build_ignore_punct_pattern(query, word_boundary=True)
         else:
             pattern = r'\b' + regex.escape(query) + r'\b'
+
+        if not pattern:
+            return []
+
         compiled_pattern = regex.compile(pattern)
 
         for doc_id, full_text in results:
+            # Get segment boundaries if position filtering is enabled
+            seg_boundaries = None
+            seg_offsets = None
+            if position_filters:
+                seg_boundaries = self._get_segment_boundaries(doc_id)
+                seg_offsets = [s[0] for s in seg_boundaries]
+
             for match in compiled_pattern.finditer(full_text):
+                # Apply position filter if specified
+                if position_filters and seg_boundaries:
+                    positions = _classify_hit_position(
+                        match.start(), match.end(), full_text, seg_boundaries, seg_offsets
+                    )
+                    if not positions & position_filters:
+                        continue
                 hits.append((doc_id, match.start()))
 
         log.info(f"Exact search completed: {len(hits)} hits from {len(results)} candidates")
         return hits
 
-    def _search_fts5_partial(self, query: str, date_from, date_to, sources, ignore_punct: bool = False):
-        """Partial/substring match using FTS5 prefix matching."""
+    def _search_fts5_partial(self, query: str, date_from, date_to, sources, ignore_punct: bool = False,
+                             position_filters: Optional[Set[str]] = None):
+        """Partial/substring match using FTS5 prefix matching + Python regex."""
         import regex
 
         log = logging.getLogger("index")
 
-        # FTS5 prefix query for candidate narrowing
-        escaped_query = query.replace('"', '""')
-        tokens = escaped_query.split()
+        # Extract valid tokens for FTS5 query (split on punctuation)
+        fts_tokens = _extract_fts5_tokens(query)
+
+        # Build FTS5 query for candidate narrowing
         # Use OR to match any token prefix (broader candidates)
-        fts_query = ' OR '.join([f'{token}*' for token in tokens])
+        if fts_tokens:
+            fts_query = ' OR '.join([f'{token}*' for token in fts_tokens])
+            use_fts_filter = True
+        else:
+            # No valid tokens - fall back to full scan
+            log.warning(f"Query '{query}' has no valid tokens - falling back to full scan")
+            use_fts_filter = False
 
-        sql = """
-            SELECT m.doc_id, fts.full_text
-            FROM documents_fts fts
-            JOIN fts_doc_mapping m ON fts.rowid = m.fts_rowid
-            JOIN documents d ON m.doc_id = d.doc_id
-            WHERE documents_fts MATCH ?
-        """
-        params = [fts_query]
+        if use_fts_filter:
+            sql = """
+                SELECT m.doc_id, fts.full_text
+                FROM documents_fts fts
+                JOIN fts_doc_mapping m ON fts.rowid = m.fts_rowid
+                JOIN documents d ON m.doc_id = d.doc_id
+                WHERE documents_fts MATCH ?
+            """
+            params = [fts_query]
+        else:
+            sql = """
+                SELECT d.doc_id, fts.full_text
+                FROM documents_fts fts
+                JOIN fts_doc_mapping m ON fts.rowid = m.fts_rowid
+                JOIN documents d ON m.doc_id = d.doc_id
+                WHERE 1=1
+            """
+            params = []
 
-        # Add filters (same as exact)
+        # Add filters
         if date_from:
             sql += " AND d.episode_date >= ?"
             params.append(date_from)
@@ -401,23 +576,39 @@ class TranscriptIndex:
         # Python substring search on candidates
         hits = []
         if ignore_punct:
-            parts = query.split()
-            if len(parts) > 1:
-                escaped_pattern = r'[\p{P}\s]+'.join(regex.escape(p) for p in parts)
-            else:
-                escaped_pattern = regex.escape(query)
+            # Use pattern that allows punctuation between/within characters (no word boundary)
+            escaped_pattern = _build_ignore_punct_pattern(query, word_boundary=False)
         else:
             escaped_pattern = regex.escape(query)
+
+        if not escaped_pattern:
+            return []
+
         compiled_pattern = regex.compile(escaped_pattern)
 
         for doc_id, full_text in results:
+            # Get segment boundaries if position filtering is enabled
+            seg_boundaries = None
+            seg_offsets = None
+            if position_filters:
+                seg_boundaries = self._get_segment_boundaries(doc_id)
+                seg_offsets = [s[0] for s in seg_boundaries]
+
             for match in compiled_pattern.finditer(full_text):
+                # Apply position filter if specified
+                if position_filters and seg_boundaries:
+                    positions = _classify_hit_position(
+                        match.start(), match.end(), full_text, seg_boundaries, seg_offsets
+                    )
+                    if not positions & position_filters:
+                        continue
                 hits.append((doc_id, match.start()))
 
         log.info(f"Partial search completed: {len(hits)} hits from {len(results)} candidates")
         return hits
 
-    def _search_fts5_regex(self, query: str, date_from, date_to, sources):
+    def _search_fts5_regex(self, query: str, date_from, date_to, sources,
+                           position_filters: Optional[Set[str]] = None):
         """Regex search with FTS5 candidate narrowing."""
         import regex
 
@@ -477,7 +668,21 @@ class TranscriptIndex:
         try:
             compiled_regex = regex.compile(query)
             for doc_id, full_text in results:
+                # Get segment boundaries if position filtering is enabled
+                seg_boundaries = None
+                seg_offsets = None
+                if position_filters:
+                    seg_boundaries = self._get_segment_boundaries(doc_id)
+                    seg_offsets = [s[0] for s in seg_boundaries]
+
                 for match in compiled_regex.finditer(full_text):
+                    # Apply position filter if specified
+                    if position_filters and seg_boundaries:
+                        positions = _classify_hit_position(
+                            match.start(), match.end(), full_text, seg_boundaries, seg_offsets
+                        )
+                        if not positions & position_filters:
+                            continue
                     hits.append((doc_id, match.start()))
         except regex.error as e:
             log.error(f"Invalid regex pattern: {query}, error: {e}")
