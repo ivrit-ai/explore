@@ -8,10 +8,10 @@ Usage:
 
 import argparse
 import logging
+import os
 import sys
 import time
 from pathlib import Path
-import os
 
 # Set up logging
 logging.basicConfig(
@@ -24,8 +24,8 @@ log = logging.getLogger(__name__)
 
 def build_index(data_dir: str):
     """Build the search index from transcript files."""
-    from .utils import get_transcripts
     from .services.index import IndexManager
+    from .utils import get_transcripts
 
     data_root = Path(data_dir).expanduser().resolve()
     json_dir = data_root / "json"
@@ -35,7 +35,7 @@ def build_index(data_dir: str):
         sys.exit(1)
 
     # Get database path
-    db_path = Path(os.environ.get('SQLITE_PATH', 'explore.sqlite'))
+    db_path = Path(os.environ.get("SQLITE_PATH", "explore.sqlite"))
 
     # Check if database already exists
     if db_path.exists():
@@ -75,7 +75,7 @@ def show_status():
     """Show status and statistics of the current index."""
     from .services.index import IndexManager
 
-    db_path = Path(os.environ.get('SQLITE_PATH', 'explore.sqlite'))
+    db_path = Path(os.environ.get("SQLITE_PATH", "explore.sqlite"))
 
     if not db_path.exists():
         log.error(f"Database not found: {db_path}")
@@ -97,7 +97,7 @@ def show_status():
     log.info(f"Total characters: {total_chars:,}")
 
     # Check for WAL files
-    for suffix in ['-wal', '-shm']:
+    for suffix in ["-wal", "-shm"]:
         wal_file = Path(str(db_path) + suffix)
         if wal_file.exists():
             wal_size = wal_file.stat().st_size / (1024 * 1024)
@@ -112,18 +112,17 @@ def main():
 Examples:
   python -m app.cli build --data-dir ../data
   python -m app.cli status
-        """
+        """,
     )
 
-    subparsers = parser.add_subparsers(dest='command', help='Command to run')
+    subparsers = parser.add_subparsers(dest="command", help="Command to run")
 
     # Build command
-    build_parser = subparsers.add_parser('build', help='Build the search index')
-    build_parser.add_argument('--data-dir', required=True,
-                             help='Path to data directory containing json/ subdirectory')
+    build_parser = subparsers.add_parser("build", help="Build the search index")
+    build_parser.add_argument("--data-dir", required=True, help="Path to data directory containing json/ subdirectory")
 
     # Status command
-    status_parser = subparsers.add_parser('status', help='Show index status and statistics')
+    subparsers.add_parser("status", help="Show index status and statistics")
 
     args = parser.parse_args()
 
@@ -132,9 +131,9 @@ Examples:
         sys.exit(1)
 
     try:
-        if args.command == 'build':
+        if args.command == "build":
             build_index(args.data_dir)
-        elif args.command == 'status':
+        elif args.command == "status":
             show_status()
         else:
             parser.print_help()
@@ -147,5 +146,5 @@ Examples:
         sys.exit(1)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

@@ -22,18 +22,30 @@ function getUrlParams() {
         sources: urlParams.get('sources') || '',
         page: urlParams.get('page') || '1',
         maxResults: urlParams.get('max_results_per_page') || '1000',
-        ignorePunct: urlParams.get('ignore_punct') || ''
+        ignorePunct: urlParams.get('ignore_punct') || '',
+        posStart: urlParams.get('pos_start') || '',
+        posEnd: urlParams.get('pos_end') || '',
+        posCross: urlParams.get('pos_cross') || ''
     };
 }
 
 /* ========================
    Fetch Metadata from API
    ======================== */
-async function fetchMetadata(query, searchMode, ignorePunct) {
+async function fetchMetadata(query, searchMode, ignorePunct, posStart, posEnd, posCross) {
     try {
         let url = `/search/metadata?q=${encodeURIComponent(query)}&search_mode=${encodeURIComponent(searchMode)}`;
         if (ignorePunct) {
             url += `&ignore_punct=${encodeURIComponent(ignorePunct)}`;
+        }
+        if (posStart) {
+            url += `&pos_start=${encodeURIComponent(posStart)}`;
+        }
+        if (posEnd) {
+            url += `&pos_end=${encodeURIComponent(posEnd)}`;
+        }
+        if (posCross) {
+            url += `&pos_cross=${encodeURIComponent(posCross)}`;
         }
         const response = await fetch(url);
         if (!response.ok) {
@@ -59,7 +71,9 @@ async function initializeFilters() {
     }
 
     // Fetch full metadata from API (for populating source checkboxes)
-    const metadata = await fetchMetadata(params.query, params.searchMode, params.ignorePunct);
+    // Don't pass position filters - show full source counts before position filtering
+    const metadata = await fetchMetadata(params.query, params.searchMode, params.ignorePunct,
+                                         '', '', '');
 
     if (metadata && metadata.sources && metadata.date_range) {
         filterState.fullMetadata = metadata;
@@ -206,6 +220,27 @@ function applyFilters() {
         url.searchParams.delete('ignore_punct');
     }
 
+    // Get position filter values from side panel checkboxes
+    const posStartCheckbox = document.getElementById('filter-pos-start');
+    const posEndCheckbox = document.getElementById('filter-pos-end');
+    const posCrossCheckbox = document.getElementById('filter-pos-cross');
+
+    if (posStartCheckbox?.checked) {
+        url.searchParams.set('pos_start', '1');
+    } else {
+        url.searchParams.delete('pos_start');
+    }
+    if (posEndCheckbox?.checked) {
+        url.searchParams.set('pos_end', '1');
+    } else {
+        url.searchParams.delete('pos_end');
+    }
+    if (posCrossCheckbox?.checked) {
+        url.searchParams.set('pos_cross', '1');
+    } else {
+        url.searchParams.delete('pos_cross');
+    }
+
     // Set filter parameters
     if (dateFrom) {
         url.searchParams.set('date_from', dateFrom);
@@ -247,9 +282,13 @@ function clearFilters() {
     } else {
         url.searchParams.delete('ignore_punct');
     }
+    // Clear all filter parameters including position filters
     url.searchParams.delete('date_from');
     url.searchParams.delete('date_to');
     url.searchParams.delete('sources');
+    url.searchParams.delete('pos_start');
+    url.searchParams.delete('pos_end');
+    url.searchParams.delete('pos_cross');
 
     // Navigate to new URL
     window.location.href = url.toString();
@@ -354,6 +393,9 @@ function updateActiveFiltersIndicator() {
     if (params.dateFrom) activeCount++;
     if (params.dateTo) activeCount++;
     if (params.sources) activeCount++; // Source filter is active if specified
+    if (params.posStart) activeCount++;
+    if (params.posEnd) activeCount++;
+    if (params.posCross) activeCount++;
 
     if (activeCount > 0) {
         if (indicator) {

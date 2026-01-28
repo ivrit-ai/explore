@@ -1,4 +1,4 @@
-# data 
+# data
 data/
 
 # Byte-compiled / optimized / DLL files
@@ -183,7 +183,7 @@ aws/README.md
 aws/THIRD_PARTY_LICENSES
 
 
-# notebooks 
+# notebooks
 *.ipynb
 /notebooks/
 
@@ -194,4 +194,3 @@ CLAUDE.md
 *.sqlite
 *sqlite-shm
 *sqlite-wal
-

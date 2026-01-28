@@ -47,15 +47,15 @@
             <p>החלון הזה ייסגר אוטומטית.</p>
         {% endif %}
     </div>
-    
+
     <script>
         setTimeout(function() {
             // Close this window
             window.close();
-            
+
             // If window doesn't close, try to redirect to main page
             window.opener.location.reload();
         }, 3000);
     </script>
 </body>
-</html> 
+</html>

@@ -23,28 +23,25 @@ from pathlib import Path
 
 from app import create_app
 from app.utils import get_transcripts
-from app.services.index import IndexManager
-from app.services.search import SearchService
 
 # ---------------------------------------------------------------------------
 # 1. CLI parsing
 # ---------------------------------------------------------------------------
 parser = argparse.ArgumentParser(description="Run ivrit.ai Explore server")
-parser.add_argument("--data-dir", default="../data",
-                    help="Path holding 'json/' and 'audio/' sub‑dirs (default ../data)")
-parser.add_argument("--auto-build", action="store_true",
-                    help="Automatically build index if database doesn't exist")
-parser.add_argument("--port", type=int, default=443,
-                    help="Port to bind (443 for prod, 5000 dev)")
+parser.add_argument(
+    "--data-dir", default="../data", help="Path holding 'json/' and 'audio/' sub‑dirs (default ../data)"
+)
+parser.add_argument("--auto-build", action="store_true", help="Automatically build index if database doesn't exist")
+parser.add_argument("--port", type=int, default=443, help="Port to bind (443 for prod, 5000 dev)")
 parser.add_argument("--dev", action="store_true", help="Run in HTTP dev mode (no SSL)")
 parser.add_argument("--ssl-cert", default="/etc/letsencrypt/live/explore.ivrit.ai/fullchain.pem")
-parser.add_argument("--ssl-key",  default="/etc/letsencrypt/live/explore.ivrit.ai/privkey.pem")
+parser.add_argument("--ssl-key", default="/etc/letsencrypt/live/explore.ivrit.ai/privkey.pem")
 args = parser.parse_args()
 
 # Set environment variables for dev mode
 if args.dev:
-    os.environ['FLASK_ENV'] = 'development'
-    os.environ['TS_USER_EMAIL'] = 'dev@ivrit.ai'
+    os.environ["FLASK_ENV"] = "development"
+    os.environ["TS_USER_EMAIL"] = "dev@ivrit.ai"
 
 # ---------------------------------------------------------------------------
 # 2. Logging to file + stdout
@@ -63,6 +60,7 @@ log = logging.getLogger("run")
 # 3. Decorator for timing
 # ---------------------------------------------------------------------------
 
+
 def timeit(name: str):
     def _decor(fn):
         def wrapper(*a, **kw):
@@ -71,17 +69,22 @@ def timeit(name: str):
             out = fn(*a, **kw)
             log.info(f"✓ {name} done in {(time.perf_counter()-t0):.2f}s")
             return out
+
         return wrapper
+
     return _decor
+
 
 # ---------------------------------------------------------------------------
 # 4. Initialise Flask + services
 # ---------------------------------------------------------------------------
 
+
 @timeit("Flask app init")
 def init_app(data_dir: str):
     app = create_app(data_dir=data_dir)
     return app
+
 
 @timeit("Index auto-build")
 def auto_build_index(data_dir: Path):
@@ -91,12 +94,13 @@ def auto_build_index(data_dir: Path):
     log.info("--auto-build: Building index from transcript files")
     build_index(str(data_dir))
 
+
 # ---------------------------------------------------------------------------
 # 5. Wire everything up
 # ---------------------------------------------------------------------------
 
 data_root = Path(args.data_dir).expanduser().resolve()
-json_dir  = data_root / "json"
+json_dir = data_root / "json"
 audio_dir = data_root / "audio"
 
 if not json_dir.is_dir():
@@ -104,7 +108,7 @@ if not json_dir.is_dir():
     sys.exit(1)
 
 # Check if database exists
-db_path = Path(os.environ.get('SQLITE_PATH', 'explore.sqlite'))
+db_path = Path(os.environ.get("SQLITE_PATH", "explore.sqlite"))
 
 if not db_path.exists():
     if args.auto_build:
@@ -129,14 +133,15 @@ with app.app_context():
 
     # make main blueprint globals match
     from app.routes import main as main_bp
+
     main_bp.file_records = file_records
     main_bp.search_service = app.config["SEARCH_SERVICE"]
-    
 
     # memory diagnostics (optional)
     try:
         import psutil
-        rss = psutil.Process().memory_info().rss / (1024 ** 2)
+
+        rss = psutil.Process().memory_info().rss / (1024**2)
         log.info(f"Resident memory: {rss:.1f} MB")
     except ImportError:
         pass

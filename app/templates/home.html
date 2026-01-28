@@ -5,7 +5,7 @@
 {% block content %}
 <div class="home-container">
     <h1>ivrit.ai Explore</h1>
-    
+
     <div class="project-info">
         <h2>אודות ivrit.ai</h2>
         <p>ivrit.ai הוא פרוייקט ללא מטרות רווח. מטרתנו היא להקל על תמיכה איכותית בעברית בכלי בינה מלאכותית, ובעיקר ביכולות תמלול, על ידי הנגשת מאגרי מידע איכותיים בעברית ברשיון נוח לשימוש.</p>
@@ -13,14 +13,14 @@
         <p>כל הנתונים מורשים תחת <a href="https://www.ivrit.ai/en/the-license/" target="_blank">רישיון ivrit.ai</a> וזמינים גם ב<a href="https://huggingface.co/ivrit-ai" target="_blank">מאגר Huggingface</a>.</p>
         <p>לתמיכה, עזרה, רעיונות ותרומות, אנא צרו קשר בכתובת <a href="mailto:info@ivrit.ai">info@ivrit.ai</a></p>
         <p></p>
-        <p>לטובת פרסום מדעי, נשמח אם תצטטו את השימוש במאגר או במערכת כך: 
+        <p>לטובת פרסום מדעי, נשמח אם תצטטו את השימוש במאגר או במערכת כך:
 Yanir Marmor, Yair Lifshitz, Yoad Snapir, and Kinneret Misgav. 2025. Building an Accurate Open-Source Hebrew ASR System through Crowdsourcing.  Proceedings of Interspeech 2025</p>
     </div>
-    
+
     {% if error %}
     <div class="error-message">{{ error }}</div>
     {% endif %}
-    
+
     <form action="{{ url_for('main.search') }}" method="GET" class="search-form" onsubmit="return validateSearch(event)">
         <input type="text" name="q" id="search-input" placeholder="הזן מונח לחיפוש..." autofocus required>
         <div class="search-options">
@@ -50,6 +50,26 @@ Yanir Marmor, Yair Lifshitz, Yoad Snapir, and Kinneret Misgav. 2025. Building an
                     <span>התעלם מפיסוק</span>
                     <span class="radio-tooltip">התעלם מסימני פיסוק בטקסט (פסיקים, נקודות, מקפים וכו')</span>
                 </label>
+            </div>
+            <div class="position-filters">
+                <label class="search-mode-label">מיקום בקטע:</label>
+                <div class="search-mode-options">
+                    <label class="radio-option">
+                        <input type="checkbox" name="pos_start" value="1">
+                        <span>בתחילת קטע</span>
+                        <span class="radio-tooltip">הצג רק תוצאות שמופיעות במילה הראשונה של קטע</span>
+                    </label>
+                    <label class="radio-option">
+                        <input type="checkbox" name="pos_end" value="1">
+                        <span>בסוף קטע</span>
+                        <span class="radio-tooltip">הצג רק תוצאות שמופיעות במילה האחרונה של קטע</span>
+                    </label>
+                    <label class="radio-option">
+                        <input type="checkbox" name="pos_cross" value="1">
+                        <span>חוצה קטעים</span>
+                        <span class="radio-tooltip">הצג רק תוצאות שחוצות גבולות בין קטעים</span>
+                    </label>
+                </div>
             </div>
             <div class="input-container">
                 <label for="max-results">מקסימום תוצאות לעמוד:</label>
@@ -166,4 +186,4 @@ document.querySelectorAll('input[name="search_mode"]').forEach(function(radio) {
     });
 });
 </script>
-{% endblock %} 
+{% endblock %}

@@ -3,15 +3,12 @@ Integration tests for the full search pipeline.
 
 Tests the complete flow: query → search → segment enrichment → results.
 """
-import pytest
+
 from tests.conftest import (
-    load_transcript_to_db,
-    MockTranscript,
-    MockSegment,
     BASIC_HEBREW_TRANSCRIPT,
-    PUNCTUATION_TRANSCRIPT,
-    POSITION_TRANSCRIPT,
-    MIXED_TRANSCRIPT,
+    MockSegment,
+    MockTranscript,
+    load_transcript_to_db,
 )
 
 
@@ -22,13 +19,14 @@ class TestFullSearchPipeline:
         """Basic search should return SearchHit objects."""
         load_transcript_to_db(in_memory_db, BASIC_HEBREW_TRANSCRIPT, 0)
 
-        from app.services.index import TranscriptIndex, IndexManager
-        from app.services.search import SearchService, SearchHit
+        from app.services.index import TranscriptIndex
+        from app.services.search import SearchHit, SearchService
 
         # Create minimal IndexManager mock
         class MockIndexManager:
             def __init__(self, db):
                 self._index = TranscriptIndex(db)
+
             def get(self):
                 return self._index
 
@@ -43,12 +41,13 @@ class TestFullSearchPipeline:
         """SearchHit should be convertible to Segment."""
         load_transcript_to_db(in_memory_db, BASIC_HEBREW_TRANSCRIPT, 0)
 
-        from app.services.index import TranscriptIndex, Segment
+        from app.services.index import Segment, TranscriptIndex
         from app.services.search import SearchService
 
         class MockIndexManager:
             def __init__(self, db):
                 self._index = TranscriptIndex(db)
+
             def get(self):
                 return self._index
 
@@ -68,19 +67,25 @@ class TestFullSearchPipeline:
         """Search with all filter types combined."""
         # Create transcripts with different dates and sources
         t1 = MockTranscript(
-            source="podcast-a", episode="podcast-a/2024.01.15 Episode 1",
-            episode_title="Episode 1", episode_date="2024-01-15",
-            segments=[MockSegment(0.0, 3.0, "שלום עולם ינואר")]
+            source="podcast-a",
+            episode="podcast-a/2024.01.15 Episode 1",
+            episode_title="Episode 1",
+            episode_date="2024-01-15",
+            segments=[MockSegment(0.0, 3.0, "שלום עולם ינואר")],
         )
         t2 = MockTranscript(
-            source="podcast-a", episode="podcast-a/2024.06.15 Episode 2",
-            episode_title="Episode 2", episode_date="2024-06-15",
-            segments=[MockSegment(0.0, 3.0, "שלום עולם יוני")]
+            source="podcast-a",
+            episode="podcast-a/2024.06.15 Episode 2",
+            episode_title="Episode 2",
+            episode_date="2024-06-15",
+            segments=[MockSegment(0.0, 3.0, "שלום עולם יוני")],
         )
         t3 = MockTranscript(
-            source="podcast-b", episode="podcast-b/2024.06.15 Episode 1",
-            episode_title="Episode 1", episode_date="2024-06-15",
-            segments=[MockSegment(0.0, 3.0, "שלום עולם אחר")]
+            source="podcast-b",
+            episode="podcast-b/2024.06.15 Episode 1",
+            episode_title="Episode 1",
+            episode_date="2024-06-15",
+            segments=[MockSegment(0.0, 3.0, "שלום עולם אחר")],
         )
         load_transcript_to_db(in_memory_db, t1, 0)
         load_transcript_to_db(in_memory_db, t2, 1)
@@ -92,6 +97,7 @@ class TestFullSearchPipeline:
         class MockIndexManager:
             def __init__(self, db):
                 self._index = TranscriptIndex(db)
+
             def get(self):
                 return self._index
 
@@ -100,11 +106,7 @@ class TestFullSearchPipeline:
 
         # Search with all filters: podcast-a, after March, position start
         hits = search_service.search(
-            query="שלום",
-            search_mode='exact',
-            sources=["podcast-a"],
-            date_from="2024-03-01",
-            position_filters={'start'}
+            query="שלום", search_mode="exact", sources=["podcast-a"], date_from="2024-03-01", position_filters={"start"}
         )
 
         # Should only match t2 (podcast-a, June, "שלום" at start)
@@ -121,6 +123,7 @@ class TestFullSearchPipeline:
         class MockIndexManager:
             def __init__(self, db):
                 self._index = TranscriptIndex(db)
+
             def get(self):
                 return self._index
 
@@ -137,9 +140,11 @@ class TestSearchModeIntegration:
     def test_exact_vs_partial_behavior(self, in_memory_db):
         """Verify exact and partial modes have different behavior."""
         transcript = MockTranscript(
-            source="test", episode="test/2024.01.01 Test",
-            episode_title="Test", episode_date="2024-01-01",
-            segments=[MockSegment(0.0, 3.0, "שלומית היא שם")]
+            source="test",
+            episode="test/2024.01.01 Test",
+            episode_title="Test",
+            episode_date="2024-01-01",
+            segments=[MockSegment(0.0, 3.0, "שלומית היא שם")],
         )
         load_transcript_to_db(in_memory_db, transcript, 0)
 
@@ -149,6 +154,7 @@ class TestSearchModeIntegration:
         class MockIndexManager:
             def __init__(self, db):
                 self._index = TranscriptIndex(db)
+
             def get(self):
                 return self._index
 
@@ -156,21 +162,23 @@ class TestSearchModeIntegration:
         search_service = SearchService(index_mgr)
 
         # Exact: "שלום" should NOT match "שלומית"
-        exact_hits = search_service.search("שלום", search_mode='exact')
+        exact_hits = search_service.search("שלום", search_mode="exact")
         assert len(exact_hits) == 0
 
         # Partial: "שלומ" (prefix) SHOULD match "שלומית"
         # NOTE: "שלום" won't match because FTS5 partial uses prefix matching
         # and "שלום" is not a prefix of "שלומית" (different last letter)
-        partial_hits = search_service.search("שלומ", search_mode='partial')
+        partial_hits = search_service.search("שלומ", search_mode="partial")
         assert len(partial_hits) == 1
 
     def test_regex_mode_integration(self, in_memory_db):
         """Regex mode should work in full pipeline."""
         transcript = MockTranscript(
-            source="test", episode="test/2024.01.01 Test",
-            episode_title="Test", episode_date="2024-01-01",
-            segments=[MockSegment(0.0, 3.0, "שלום123 ושלום456")]
+            source="test",
+            episode="test/2024.01.01 Test",
+            episode_title="Test",
+            episode_date="2024-01-01",
+            segments=[MockSegment(0.0, 3.0, "שלום123 ושלום456")],
         )
         load_transcript_to_db(in_memory_db, transcript, 0)
 
@@ -180,13 +188,14 @@ class TestSearchModeIntegration:
         class MockIndexManager:
             def __init__(self, db):
                 self._index = TranscriptIndex(db)
+
             def get(self):
                 return self._index
 
         index_mgr = MockIndexManager(in_memory_db)
         search_service = SearchService(index_mgr)
 
-        hits = search_service.search(r"שלום\d+", search_mode='regex')
+        hits = search_service.search(r"שלום\d+", search_mode="regex")
         assert len(hits) == 2
 
 
@@ -196,12 +205,14 @@ class TestPositionFilterIntegration:
     def test_start_filter_pipeline(self, in_memory_db):
         """Position filter 'start' should work in full pipeline."""
         transcript = MockTranscript(
-            source="test", episode="test/2024.01.01 Test",
-            episode_title="Test", episode_date="2024-01-01",
+            source="test",
+            episode="test/2024.01.01 Test",
+            episode_title="Test",
+            episode_date="2024-01-01",
             segments=[
                 MockSegment(0.0, 3.0, "שלום עולם באמצע"),
                 MockSegment(3.0, 6.0, "באמצע שלום אחרון"),
-            ]
+            ],
         )
         load_transcript_to_db(in_memory_db, transcript, 0)
 
@@ -211,6 +222,7 @@ class TestPositionFilterIntegration:
         class MockIndexManager:
             def __init__(self, db):
                 self._index = TranscriptIndex(db)
+
             def get(self):
                 return self._index
 
@@ -218,19 +230,21 @@ class TestPositionFilterIntegration:
         search_service = SearchService(index_mgr)
 
         # Only "שלום" at start of first segment should match
-        hits = search_service.search("שלום", search_mode='exact', position_filters={'start'})
+        hits = search_service.search("שלום", search_mode="exact", position_filters={"start"})
         assert len(hits) == 1
         assert hits[0].char_offset == 0
 
     def test_end_filter_pipeline(self, in_memory_db):
         """Position filter 'end' should work in full pipeline."""
         transcript = MockTranscript(
-            source="test", episode="test/2024.01.01 Test",
-            episode_title="Test", episode_date="2024-01-01",
+            source="test",
+            episode="test/2024.01.01 Test",
+            episode_title="Test",
+            episode_date="2024-01-01",
             segments=[
                 MockSegment(0.0, 3.0, "ראשון שלום"),
                 MockSegment(3.0, 6.0, "שלום באמצע"),
-            ]
+            ],
         )
         load_transcript_to_db(in_memory_db, transcript, 0)
 
@@ -240,6 +254,7 @@ class TestPositionFilterIntegration:
         class MockIndexManager:
             def __init__(self, db):
                 self._index = TranscriptIndex(db)
+
             def get(self):
                 return self._index
 
@@ -247,7 +262,7 @@ class TestPositionFilterIntegration:
         search_service = SearchService(index_mgr)
 
         # Only "שלום" at end of first segment should match
-        hits = search_service.search("שלום", search_mode='exact', position_filters={'end'})
+        hits = search_service.search("שלום", search_mode="exact", position_filters={"end"})
         assert len(hits) == 1
 
 
@@ -257,14 +272,18 @@ class TestMultiDocumentSearch:
     def test_search_multiple_documents(self, in_memory_db):
         """Search should find results across multiple documents."""
         t1 = MockTranscript(
-            source="podcast-a", episode="podcast-a/2024.01.01 Ep1",
-            episode_title="Ep1", episode_date="2024-01-01",
-            segments=[MockSegment(0.0, 3.0, "שלום מפודקאסט א")]
+            source="podcast-a",
+            episode="podcast-a/2024.01.01 Ep1",
+            episode_title="Ep1",
+            episode_date="2024-01-01",
+            segments=[MockSegment(0.0, 3.0, "שלום מפודקאסט א")],
         )
         t2 = MockTranscript(
-            source="podcast-b", episode="podcast-b/2024.01.01 Ep1",
-            episode_title="Ep1", episode_date="2024-01-01",
-            segments=[MockSegment(0.0, 3.0, "שלום מפודקאסט ב")]
+            source="podcast-b",
+            episode="podcast-b/2024.01.01 Ep1",
+            episode_title="Ep1",
+            episode_date="2024-01-01",
+            segments=[MockSegment(0.0, 3.0, "שלום מפודקאסט ב")],
         )
         load_transcript_to_db(in_memory_db, t1, 0)
         load_transcript_to_db(in_memory_db, t2, 1)
@@ -275,13 +294,14 @@ class TestMultiDocumentSearch:
         class MockIndexManager:
             def __init__(self, db):
                 self._index = TranscriptIndex(db)
+
             def get(self):
                 return self._index
 
         index_mgr = MockIndexManager(in_memory_db)
         search_service = SearchService(index_mgr)
 
-        hits = search_service.search("שלום", search_mode='exact')
+        hits = search_service.search("שלום", search_mode="exact")
         assert len(hits) == 2
 
         # Verify different documents
@@ -291,14 +311,18 @@ class TestMultiDocumentSearch:
     def test_search_respects_source_filter(self, in_memory_db):
         """Source filter should limit results to specific sources."""
         t1 = MockTranscript(
-            source="include-me", episode="include-me/2024.01.01 Ep1",
-            episode_title="Ep1", episode_date="2024-01-01",
-            segments=[MockSegment(0.0, 3.0, "שלום כלול")]
+            source="include-me",
+            episode="include-me/2024.01.01 Ep1",
+            episode_title="Ep1",
+            episode_date="2024-01-01",
+            segments=[MockSegment(0.0, 3.0, "שלום כלול")],
         )
         t2 = MockTranscript(
-            source="exclude-me", episode="exclude-me/2024.01.01 Ep1",
-            episode_title="Ep1", episode_date="2024-01-01",
-            segments=[MockSegment(0.0, 3.0, "שלום לא כלול")]
+            source="exclude-me",
+            episode="exclude-me/2024.01.01 Ep1",
+            episode_title="Ep1",
+            episode_date="2024-01-01",
+            segments=[MockSegment(0.0, 3.0, "שלום לא כלול")],
         )
         load_transcript_to_db(in_memory_db, t1, 0)
         load_transcript_to_db(in_memory_db, t2, 1)
@@ -309,13 +333,14 @@ class TestMultiDocumentSearch:
         class MockIndexManager:
             def __init__(self, db):
                 self._index = TranscriptIndex(db)
+
             def get(self):
                 return self._index
 
         index_mgr = MockIndexManager(in_memory_db)
         search_service = SearchService(index_mgr)
 
-        hits = search_service.search("שלום", search_mode='exact', sources=["include-me"])
+        hits = search_service.search("שלום", search_mode="exact", sources=["include-me"])
         assert len(hits) == 1
         assert hits[0].episode_idx == 0
 
@@ -326,9 +351,11 @@ class TestSegmentEnrichment:
     def test_segment_has_all_fields(self, in_memory_db):
         """Enriched segment should have all required fields."""
         transcript = MockTranscript(
-            source="test", episode="test/2024.01.01 Test",
-            episode_title="Test", episode_date="2024-01-01",
-            segments=[MockSegment(1.5, 4.2, "שלום עולם")]
+            source="test",
+            episode="test/2024.01.01 Test",
+            episode_title="Test",
+            episode_date="2024-01-01",
+            segments=[MockSegment(1.5, 4.2, "שלום עולם")],
         )
         load_transcript_to_db(in_memory_db, transcript, 0)
 
@@ -338,6 +365,7 @@ class TestSegmentEnrichment:
         class MockIndexManager:
             def __init__(self, db):
                 self._index = TranscriptIndex(db)
+
             def get(self):
                 return self._index
 
@@ -356,13 +384,15 @@ class TestSegmentEnrichment:
     def test_hit_in_later_segment(self, in_memory_db):
         """Hit in later segment should return correct segment info."""
         transcript = MockTranscript(
-            source="test", episode="test/2024.01.01 Test",
-            episode_title="Test", episode_date="2024-01-01",
+            source="test",
+            episode="test/2024.01.01 Test",
+            episode_title="Test",
+            episode_date="2024-01-01",
             segments=[
                 MockSegment(0.0, 2.0, "מבוא קצר"),
                 MockSegment(2.0, 5.0, "שלום עולם"),
                 MockSegment(5.0, 8.0, "סיום"),
-            ]
+            ],
         )
         load_transcript_to_db(in_memory_db, transcript, 0)
 
@@ -372,6 +402,7 @@ class TestSegmentEnrichment:
         class MockIndexManager:
             def __init__(self, db):
                 self._index = TranscriptIndex(db)
+
             def get(self):
                 return self._index
 
@@ -393,9 +424,11 @@ class TestIgnorePunctIntegration:
     def test_ignore_punct_in_pipeline(self, in_memory_db):
         """ignore_punct should work through full pipeline."""
         transcript = MockTranscript(
-            source="test", episode="test/2024.01.01 Test",
-            episode_title="Test", episode_date="2024-01-01",
-            segments=[MockSegment(0.0, 3.0, "שלום, עולם!")]
+            source="test",
+            episode="test/2024.01.01 Test",
+            episode_title="Test",
+            episode_date="2024-01-01",
+            segments=[MockSegment(0.0, 3.0, "שלום, עולם!")],
         )
         load_transcript_to_db(in_memory_db, transcript, 0)
 
@@ -405,6 +438,7 @@ class TestIgnorePunctIntegration:
         class MockIndexManager:
             def __init__(self, db):
                 self._index = TranscriptIndex(db)
+
             def get(self):
                 return self._index
 
@@ -412,10 +446,10 @@ class TestIgnorePunctIntegration:
         search_service = SearchService(index_mgr)
 
         # Without ignore_punct
-        hits_no_ignore = search_service.search("שלום עולם", search_mode='exact', ignore_punct=False)
+        hits_no_ignore = search_service.search("שלום עולם", search_mode="exact", ignore_punct=False)
 
         # With ignore_punct
-        hits_with_ignore = search_service.search("שלום עולם", search_mode='exact', ignore_punct=True)
+        hits_with_ignore = search_service.search("שלום עולם", search_mode="exact", ignore_punct=True)
 
         # Should find more (or same) with ignore_punct
         assert len(hits_with_ignore) >= len(hits_no_ignore)

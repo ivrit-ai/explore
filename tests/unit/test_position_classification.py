@@ -9,7 +9,7 @@ The function determines if a match is at:
 - 'end': Match ends in last word of segment
 - 'cross': Match spans multiple segments
 """
-import pytest
+
 from app.services.index import _classify_hit_position
 
 
@@ -29,10 +29,10 @@ class TestClassifyHitPositionBasic:
             hit_end=4,  # "מילה"
             full_text=full_text,
             seg_boundaries=seg_boundaries,
-            seg_offsets=seg_offsets
+            seg_offsets=seg_offsets,
         )
 
-        assert 'start' in result
+        assert "start" in result
 
     def test_match_at_segment_end(self):
         """Match ending at last word should return 'end'."""
@@ -50,10 +50,10 @@ class TestClassifyHitPositionBasic:
             hit_end=last_word_end,
             full_text=full_text,
             seg_boundaries=seg_boundaries,
-            seg_offsets=seg_offsets
+            seg_offsets=seg_offsets,
         )
 
-        assert 'end' in result
+        assert "end" in result
 
     def test_match_in_middle(self):
         """Match in middle should return empty or neither start/end."""
@@ -71,11 +71,11 @@ class TestClassifyHitPositionBasic:
             hit_end=middle_end,
             full_text=full_text,
             seg_boundaries=seg_boundaries,
-            seg_offsets=seg_offsets
+            seg_offsets=seg_offsets,
         )
 
-        assert 'start' not in result
-        assert 'end' not in result
+        assert "start" not in result
+        assert "end" not in result
 
     def test_match_spans_start_and_end(self):
         """Match spanning entire segment should have both 'start' and 'end'."""
@@ -88,11 +88,11 @@ class TestClassifyHitPositionBasic:
             hit_end=len(full_text),
             full_text=full_text,
             seg_boundaries=seg_boundaries,
-            seg_offsets=seg_offsets
+            seg_offsets=seg_offsets,
         )
 
-        assert 'start' in result
-        assert 'end' in result
+        assert "start" in result
+        assert "end" in result
 
 
 class TestClassifyHitPositionSingleWord:
@@ -105,14 +105,10 @@ class TestClassifyHitPositionSingleWord:
         seg_offsets = [0]
 
         result = _classify_hit_position(
-            hit_start=0,
-            hit_end=4,
-            full_text=full_text,
-            seg_boundaries=seg_boundaries,
-            seg_offsets=seg_offsets
+            hit_start=0, hit_end=4, full_text=full_text, seg_boundaries=seg_boundaries, seg_offsets=seg_offsets
         )
 
-        assert 'start' in result
+        assert "start" in result
 
     def test_single_word_segment_full_match(self):
         """Single-word segment: full match should return both 'start' and 'end'."""
@@ -121,15 +117,11 @@ class TestClassifyHitPositionSingleWord:
         seg_offsets = [0]
 
         result = _classify_hit_position(
-            hit_start=0,
-            hit_end=4,
-            full_text=full_text,
-            seg_boundaries=seg_boundaries,
-            seg_offsets=seg_offsets
+            hit_start=0, hit_end=4, full_text=full_text, seg_boundaries=seg_boundaries, seg_offsets=seg_offsets
         )
 
-        assert 'start' in result
-        assert 'end' in result
+        assert "start" in result
+        assert "end" in result
 
     def test_single_word_partial_match_at_start(self):
         """Single-word segment: partial match at start."""
@@ -139,16 +131,12 @@ class TestClassifyHitPositionSingleWord:
 
         # Match just "בו" (first 2 chars)
         result = _classify_hit_position(
-            hit_start=0,
-            hit_end=2,
-            full_text=full_text,
-            seg_boundaries=seg_boundaries,
-            seg_offsets=seg_offsets
+            hit_start=0, hit_end=2, full_text=full_text, seg_boundaries=seg_boundaries, seg_offsets=seg_offsets
         )
 
-        assert 'start' in result
+        assert "start" in result
         # Should NOT have 'end' since we didn't match to end of segment
-        assert 'end' not in result
+        assert "end" not in result
 
 
 class TestClassifyHitPositionMultiSegment:
@@ -162,10 +150,7 @@ class TestClassifyHitPositionMultiSegment:
         seg2 = "מה קורה"
         full_text = seg1 + " " + seg2
 
-        seg_boundaries = [
-            (0, len(seg1)),
-            (len(seg1) + 1, len(seg2))
-        ]
+        seg_boundaries = [(0, len(seg1)), (len(seg1) + 1, len(seg2))]
         seg_offsets = [0, len(seg1) + 1]
 
         # Match that starts in seg1 and extends past it
@@ -178,10 +163,10 @@ class TestClassifyHitPositionMultiSegment:
             hit_end=match_end,
             full_text=full_text,
             seg_boundaries=seg_boundaries,
-            seg_offsets=seg_offsets
+            seg_offsets=seg_offsets,
         )
 
-        assert 'cross' in result
+        assert "cross" in result
 
     def test_match_at_second_segment_start(self):
         """Match at start of second segment should return 'start'."""
@@ -189,10 +174,7 @@ class TestClassifyHitPositionMultiSegment:
         seg2 = "מה קורה"
         full_text = seg1 + " " + seg2
 
-        seg_boundaries = [
-            (0, len(seg1)),
-            (len(seg1) + 1, len(seg2))
-        ]
+        seg_boundaries = [(0, len(seg1)), (len(seg1) + 1, len(seg2))]
         seg_offsets = [0, len(seg1) + 1]
 
         # Match "מה" at start of second segment
@@ -204,10 +186,10 @@ class TestClassifyHitPositionMultiSegment:
             hit_end=match_end,
             full_text=full_text,
             seg_boundaries=seg_boundaries,
-            seg_offsets=seg_offsets
+            seg_offsets=seg_offsets,
         )
 
-        assert 'start' in result
+        assert "start" in result
 
     def test_match_at_first_segment_end(self):
         """Match at end of first segment should return 'end'."""
@@ -215,10 +197,7 @@ class TestClassifyHitPositionMultiSegment:
         seg2 = "מה קורה"
         full_text = seg1 + " " + seg2
 
-        seg_boundaries = [
-            (0, len(seg1)),
-            (len(seg1) + 1, len(seg2))
-        ]
+        seg_boundaries = [(0, len(seg1)), (len(seg1) + 1, len(seg2))]
         seg_offsets = [0, len(seg1) + 1]
 
         # Match "עולם" at end of first segment
@@ -230,10 +209,10 @@ class TestClassifyHitPositionMultiSegment:
             hit_end=match_end,
             full_text=full_text,
             seg_boundaries=seg_boundaries,
-            seg_offsets=seg_offsets
+            seg_offsets=seg_offsets,
         )
 
-        assert 'end' in result
+        assert "end" in result
 
 
 class TestClassifyHitPositionEdgeCases:
@@ -247,11 +226,7 @@ class TestClassifyHitPositionEdgeCases:
 
         # This might raise or return empty set - verify behavior
         result = _classify_hit_position(
-            hit_start=0,
-            hit_end=0,
-            full_text=full_text,
-            seg_boundaries=seg_boundaries,
-            seg_offsets=seg_offsets
+            hit_start=0, hit_end=0, full_text=full_text, seg_boundaries=seg_boundaries, seg_offsets=seg_offsets
         )
 
         # Empty match - behavior depends on implementation
@@ -263,10 +238,7 @@ class TestClassifyHitPositionEdgeCases:
         seg2 = "שני"
         full_text = seg1 + " " + seg2
 
-        seg_boundaries = [
-            (0, len(seg1)),
-            (len(seg1) + 1, len(seg2))
-        ]
+        seg_boundaries = [(0, len(seg1)), (len(seg1) + 1, len(seg2))]
         seg_offsets = [0, len(seg1) + 1]
 
         # Match starting exactly at boundary of seg2
@@ -277,10 +249,10 @@ class TestClassifyHitPositionEdgeCases:
             hit_end=boundary + 3,
             full_text=full_text,
             seg_boundaries=seg_boundaries,
-            seg_offsets=seg_offsets
+            seg_offsets=seg_offsets,
         )
 
-        assert 'start' in result
+        assert "start" in result
 
     def test_match_extends_exactly_to_segment_end(self):
         """Match ending exactly at segment boundary."""
@@ -294,10 +266,10 @@ class TestClassifyHitPositionEdgeCases:
             hit_end=len(full_text),
             full_text=full_text,
             seg_boundaries=seg_boundaries,
-            seg_offsets=seg_offsets
+            seg_offsets=seg_offsets,
         )
 
-        assert 'end' in result
+        assert "end" in result
 
     def test_three_segments_match_in_middle_segment(self):
         """Match in middle segment of three."""
@@ -306,11 +278,7 @@ class TestClassifyHitPositionEdgeCases:
         seg3 = "אחרון"
         full_text = seg1 + " " + seg2 + " " + seg3
 
-        seg_boundaries = [
-            (0, len(seg1)),
-            (len(seg1) + 1, len(seg2)),
-            (len(seg1) + 1 + len(seg2) + 1, len(seg3))
-        ]
+        seg_boundaries = [(0, len(seg1)), (len(seg1) + 1, len(seg2)), (len(seg1) + 1 + len(seg2) + 1, len(seg3))]
         seg_offsets = [0, len(seg1) + 1, len(seg1) + 1 + len(seg2) + 1]
 
         # Match "אמצע" in middle segment
@@ -322,12 +290,12 @@ class TestClassifyHitPositionEdgeCases:
             hit_end=match_end,
             full_text=full_text,
             seg_boundaries=seg_boundaries,
-            seg_offsets=seg_offsets
+            seg_offsets=seg_offsets,
         )
 
         # "אמצע" is the only word in its segment, so it should be both start and end
-        assert 'start' in result
-        assert 'end' in result
+        assert "start" in result
+        assert "end" in result
 
     def test_negative_index_protection(self):
         """Verify bisect result doesn't go negative."""
@@ -337,11 +305,7 @@ class TestClassifyHitPositionEdgeCases:
 
         # Match at very beginning
         result = _classify_hit_position(
-            hit_start=0,
-            hit_end=1,
-            full_text=full_text,
-            seg_boundaries=seg_boundaries,
-            seg_offsets=seg_offsets
+            hit_start=0, hit_end=1, full_text=full_text, seg_boundaries=seg_boundaries, seg_offsets=seg_offsets
         )
 
         # Should not crash
@@ -366,7 +330,7 @@ class TestClassifyHitPositionWithPunctuation:
             hit_end=match_end,
             full_text=full_text,
             seg_boundaries=seg_boundaries,
-            seg_offsets=seg_offsets
+            seg_offsets=seg_offsets,
         )
 
         # First space is after "!שלום" at position 5
@@ -389,10 +353,10 @@ class TestClassifyHitPositionWithPunctuation:
             hit_end=match_end,
             full_text=full_text,
             seg_boundaries=seg_boundaries,
-            seg_offsets=seg_offsets
+            seg_offsets=seg_offsets,
         )
 
-        assert 'end' in result
+        assert "end" in result
 
     def test_segment_with_hebrew_maqaf(self):
         """Segment with Hebrew maqaf (־) word connector."""
@@ -410,7 +374,7 @@ class TestClassifyHitPositionWithPunctuation:
             hit_end=match_end,
             full_text=full_text,
             seg_boundaries=seg_boundaries,
-            seg_offsets=seg_offsets
+            seg_offsets=seg_offsets,
         )
 
-        assert 'start' in result
+        assert "start" in result

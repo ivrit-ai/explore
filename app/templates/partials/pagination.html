@@ -12,7 +12,10 @@
                           q=query, max_results_per_page=max_results_per_page,
                           page=pagination.page - 1, search_mode=search_mode,
                           date_from=date_from, date_to=date_to, sources=sources_param,
-                          ignore_punct='1' if ignore_punct else '') }}"
+                          ignore_punct='1' if ignore_punct else '',
+                          pos_start='1' if position_filters and 'start' in position_filters else '',
+                          pos_end='1' if position_filters and 'end' in position_filters else '',
+                          pos_cross='1' if position_filters and 'cross' in position_filters else '') }}"
          class="pagination-btn">← הקודם</a>
     {% else %}
       <span class="pagination-btn disabled">← הקודם</span>
@@ -28,7 +31,10 @@
                           q=query, max_results_per_page=max_results_per_page,
                           page=1, search_mode=search_mode,
                           date_from=date_from, date_to=date_to, sources=sources_param,
-                          ignore_punct='1' if ignore_punct else '') }}"
+                          ignore_punct='1' if ignore_punct else '',
+                          pos_start='1' if position_filters and 'start' in position_filters else '',
+                          pos_end='1' if position_filters and 'end' in position_filters else '',
+                          pos_cross='1' if position_filters and 'cross' in position_filters else '') }}"
          class="pagination-btn">1</a>
       {% if start_page > 2 %}<span class="pagination-ellipsis">…</span>{% endif %}
     {% endif %}
@@ -41,7 +47,10 @@
                             q=query, max_results_per_page=max_results_per_page,
                             page=p, search_mode=search_mode,
                             date_from=date_from, date_to=date_to, sources=sources_param,
-                            ignore_punct='1' if ignore_punct else '') }}"
+                            ignore_punct='1' if ignore_punct else '',
+                            pos_start='1' if position_filters and 'start' in position_filters else '',
+                            pos_end='1' if position_filters and 'end' in position_filters else '',
+                            pos_cross='1' if position_filters and 'cross' in position_filters else '') }}"
            class="pagination-btn">{{ p }}</a>
       {% endif %}
     {% endfor %}
@@ -54,7 +63,10 @@
                           q=query, max_results_per_page=max_results_per_page,
                           page=pagination.total_pages, search_mode=search_mode,
                           date_from=date_from, date_to=date_to, sources=sources_param,
-                          ignore_punct='1' if ignore_punct else '') }}"
+                          ignore_punct='1' if ignore_punct else '',
+                          pos_start='1' if position_filters and 'start' in position_filters else '',
+                          pos_end='1' if position_filters and 'end' in position_filters else '',
+                          pos_cross='1' if position_filters and 'cross' in position_filters else '') }}"
          class="pagination-btn">{{ pagination.total_pages }}</a>
     {% endif %}
 
@@ -64,7 +76,10 @@
                           q=query, max_results_per_page=max_results_per_page,
                           page=pagination.page + 1, search_mode=search_mode,
                           date_from=date_from, date_to=date_to, sources=sources_param,
-                          ignore_punct='1' if ignore_punct else '') }}"
+                          ignore_punct='1' if ignore_punct else '',
+                          pos_start='1' if position_filters and 'start' in position_filters else '',
+                          pos_end='1' if position_filters and 'end' in position_filters else '',
+                          pos_cross='1' if position_filters and 'cross' in position_filters else '') }}"
          class="pagination-btn">הבא →</a>
     {% else %}
       <span class="pagination-btn disabled">הבא →</span>

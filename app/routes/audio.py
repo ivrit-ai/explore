@@ -1,14 +1,17 @@
-from flask import Blueprint, send_file, current_app, request
-from ..routes.auth import login_required
-from ..utils import resolve_audio_path
-import os
-import mimetypes
-import time
 import logging
+import mimetypes
+import os
+import time
 import uuid as uuid_module
 
-bp = Blueprint('audio', __name__)
+from flask import Blueprint, current_app, request, send_file
+
+from ..routes.auth import login_required
+from ..utils import resolve_audio_path
+
+bp = Blueprint("audio", __name__)
 logger = logging.getLogger(__name__)
+
 
 def send_range_file(path, request_id=None):
     """
@@ -31,7 +34,7 @@ def send_range_file(path, request_id=None):
     # Log request details
     if request_id:
         file_size = os.path.getsize(path)
-        range_header = request.headers.get('Range')
+        range_header = request.headers.get("Range")
 
         if range_header:
             logger.debug(f"[TIMING] [REQ:{request_id}] Range request: {range_header} for file size {file_size}")
@@ -45,7 +48,7 @@ def send_range_file(path, request_id=None):
         path,
         conditional=True,
         as_attachment=False,
-        mimetype=mimetypes.guess_type(path)[0] or 'application/octet-stream'
+        mimetype=mimetypes.guess_type(path)[0] or "application/octet-stream",
     )
 
     # Log completion
@@ -55,7 +58,9 @@ def send_range_file(path, request_id=None):
         logger.debug(f"[TIMING] [REQ:{request_id}] Response prepared ({status}) in {duration_ms:.2f}ms")
 
     return resp
-@bp.route('/audio/<path:doc_uuid>')
+
+
+@bp.route("/audio/<path:doc_uuid>")
 @login_required
 def serve_audio_by_uuid(doc_uuid):
     # --- Request metadata ---
@@ -81,7 +86,7 @@ def serve_audio_by_uuid(doc_uuid):
 
     try:
         # --- Resolve episode path ---
-        index = current_app.config['SEARCH_SERVICE']._index_mgr.get()
+        index = current_app.config["SEARCH_SERVICE"]._index_mgr.get()
         episode_path = index.get_episode_by_uuid(uuid_clean)
 
         logger.debug(f"{tag} UUID resolved to episode: {episode_path}")

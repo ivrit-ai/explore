@@ -3,30 +3,28 @@ Shared pytest fixtures for search logic tests.
 
 Provides mock transcripts, in-memory database setup, and common test utilities.
 """
-import pytest
-import tempfile
-import os
-from pathlib import Path
-from typing import List, Tuple
+
 from dataclasses import dataclass
+
+import pytest
 
 # Import the actual modules we're testing
 from app.services.db import DatabaseService
 from app.services.index import (
     TranscriptIndex,
-    _classify_hit_position,
     _episode_to_string_and_segments,
     _setup_schema,
 )
-
 
 # ============================================================================
 # MOCK DATA STRUCTURES
 # ============================================================================
 
+
 @dataclass
 class MockSegment:
     """Mock segment for test data."""
+
     start: float
     end: float
     text: str
@@ -36,11 +34,12 @@ class MockSegment:
 @dataclass
 class MockTranscript:
     """Mock transcript with metadata and segments."""
+
     source: str
     episode: str
     episode_title: str
     episode_date: str
-    segments: List[MockSegment]
+    segments: list[MockSegment]
 
     def to_dict(self) -> dict:
         """Convert to JSON-compatible dict."""
@@ -140,6 +139,7 @@ MIXED_TRANSCRIPT = MockTranscript(
 # DATABASE FIXTURES
 # ============================================================================
 
+
 @pytest.fixture
 def temp_db_path(tmp_path):
     """Provide a temporary database path."""
@@ -165,7 +165,8 @@ def transcript_index(in_memory_db) -> TranscriptIndex:
 # DATA LOADING HELPERS
 # ============================================================================
 
-def load_transcript_to_db(db: DatabaseService, transcript: MockTranscript, doc_id: int) -> Tuple[str, List[dict]]:
+
+def load_transcript_to_db(db: DatabaseService, transcript: MockTranscript, doc_id: int) -> tuple[str, list[dict]]:
     """
     Load a mock transcript into the database.
 
@@ -183,22 +184,15 @@ def load_transcript_to_db(db: DatabaseService, transcript: MockTranscript, doc_i
         """INSERT INTO documents
            (doc_id, uuid, source, episode, episode_date, episode_title)
            VALUES (?, ?, ?, ?, ?, ?)""",
-        [doc_id, doc_uuid, transcript.source, transcript.episode,
-         transcript.episode_date, transcript.episode_title]
+        [doc_id, doc_uuid, transcript.source, transcript.episode, transcript.episode_date, transcript.episode_title],
     )
 
     # Insert into FTS5
-    cursor = db.execute(
-        "INSERT INTO documents_fts(full_text) VALUES (?)",
-        [full_text]
-    )
+    cursor = db.execute("INSERT INTO documents_fts(full_text) VALUES (?)", [full_text])
     fts_rowid = cursor.lastrowid
 
     # Insert FTS mapping
-    db.execute(
-        "INSERT INTO fts_doc_mapping(fts_rowid, doc_id) VALUES (?, ?)",
-        [fts_rowid, doc_id]
-    )
+    db.execute("INSERT INTO fts_doc_mapping(fts_rowid, doc_id) VALUES (?, ?)", [fts_rowid, doc_id])
 
     # Insert segments
     for seg_idx, seg in enumerate(segments_data):
@@ -206,8 +200,7 @@ def load_transcript_to_db(db: DatabaseService, transcript: MockTranscript, doc_i
             """INSERT INTO segments
                (doc_id, segment_id, segment_text, avg_logprob, char_offset, start_time, end_time)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            [doc_id, seg_idx, seg["text"], seg["avg_logprob"],
-             seg["char_offset"], seg["start"], seg["end"]]
+            [doc_id, seg_idx, seg["text"], seg["avg_logprob"], seg["char_offset"], seg["start"], seg["end"]],
         )
 
     db.commit()
@@ -215,7 +208,7 @@ def load_transcript_to_db(db: DatabaseService, transcript: MockTranscript, doc_i
 
 
 @pytest.fixture
-def basic_index(in_memory_db) -> Tuple[TranscriptIndex, str, List[dict]]:
+def basic_index(in_memory_db) -> tuple[TranscriptIndex, str, list[dict]]:
     """
     Create index with basic Hebrew transcript.
 
@@ -228,7 +221,7 @@ def basic_index(in_memory_db) -> Tuple[TranscriptIndex, str, List[dict]]:
 
 
 @pytest.fixture
-def punctuation_index(in_memory_db) -> Tuple[TranscriptIndex, str, List[dict]]:
+def punctuation_index(in_memory_db) -> tuple[TranscriptIndex, str, list[dict]]:
     """Create index with punctuation test transcript."""
     full_text, segments_data = load_transcript_to_db(in_memory_db, PUNCTUATION_TRANSCRIPT, 0)
     index = TranscriptIndex(in_memory_db)
@@ -236,7 +229,7 @@ def punctuation_index(in_memory_db) -> Tuple[TranscriptIndex, str, List[dict]]:
 
 
 @pytest.fixture
-def position_index(in_memory_db) -> Tuple[TranscriptIndex, str, List[dict]]:
+def position_index(in_memory_db) -> tuple[TranscriptIndex, str, list[dict]]:
     """Create index with position test transcript."""
     full_text, segments_data = load_transcript_to_db(in_memory_db, POSITION_TRANSCRIPT, 0)
     index = TranscriptIndex(in_memory_db)
@@ -263,7 +256,8 @@ def multi_transcript_index(in_memory_db) -> TranscriptIndex:
 # HELPER FUNCTIONS FOR TESTS
 # ============================================================================
 
-def get_segment_boundaries(segments_data: List[dict]) -> Tuple[List[Tuple[int, int]], List[int]]:
+
+def get_segment_boundaries(segments_data: list[dict]) -> tuple[list[tuple[int, int]], list[int]]:
     """
     Extract segment boundaries from segments_data.
 

@@ -30,7 +30,7 @@ const audioManager = {
         audio.addEventListener('pause', () => { if (this.current === audio) this.current = null; });
         return audio;
     },
-    stop() { 
+    stop() {
         if (this.current) this.current.pause();
         this.current = null;
     },
@@ -70,18 +70,18 @@ function loadAudio(placeholder) {
     const cont  = document.createElement('div');
     cont.className = 'audio-container';
     cont.dataset.playerId = playerId;
-    
-    const audio = document.createElement('audio'); 
-    audio.controls = true; 
+
+    const audio = document.createElement('audio');
+    audio.controls = true;
     audio.preload = 'metadata';
     audio.id = playerId;
-    
-    const src   = document.createElement('source'); 
+
+    const src   = document.createElement('source');
     src.src = audioUrl;
     src.type = fmt === 'opus' ? 'audio/ogg; codecs=opus' : fmt === 'mp3' ? 'audio/mpeg' : `audio/${fmt}`;
-    
-    audio.appendChild(src); 
-    cont.appendChild(audio); 
+
+    audio.appendChild(src);
+    cont.appendChild(audio);
     placeholder.replaceWith(cont);
 
     audioManager.register(audio, playerId);
@@ -97,22 +97,22 @@ const segmentCache = {};   // key = `${epi}|${idx}`
 const segmentBatchQueue = {
     queue: new Map(), // Map<episode_idx, Set<{char_offset, resolve}>>
     timeout: null,
-    
+
     add(epi, char, resolve) {
         if (!this.queue.has(epi)) {
             this.queue.set(epi, new Set());
         }
         this.queue.get(epi).add({ char_offset: char, resolve });
-        
+
         // Schedule a fetch if not already scheduled
         if (!this.timeout) {
             this.timeout = setTimeout(() => this.flush(), 50); // 50ms debounce
         }
     },
-    
+
     async flush() {
         if (this.queue.size === 0) return;
-        
+
         // Convert queue to lookups array
         const lookups = [];
         this.queue.forEach((chars, epi) => {
@@ -120,20 +120,20 @@ const segmentBatchQueue = {
                 lookups.push({ episode_idx: epi, char_offset });
             });
         });
-        
+
         // Clear queue
         this.queue.clear();
         this.timeout = null;
-        
+
         try {
             const response = await fetch('/search/segment', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ lookups })
             });
-            
+
             const results = await response.json();
-            
+
             // Resolve all promises with their corresponding results
             results.forEach(result => {
                 const chars = this.queue.get(result.episode_idx);
@@ -163,7 +163,7 @@ function fetchSegmentByChar(epi, char) {
 
 async function fetchSegmentsByIdxBatch(lookups) {
     if (lookups.length === 0) return [];
-    
+
     console.log(`Fetching ${lookups.length} segments by idx in batch`);
     try {
         const response = await fetch('/search/segment/by_idx', {
@@ -171,7 +171,7 @@ async function fetchSegmentsByIdxBatch(lookups) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ lookups })
         });
-        
+
         const results = await response.json();
         console.log(`Received ${results.length} segments from batch request`);
         return results;
@@ -191,10 +191,10 @@ function highlightQuery(txt, charOffset) {
     const regex = new RegExp(`(${escaped})`, 'i');
     const match = txt.slice(charOffset).match(regex);
     if (!match) return txt;
-    
+
     const matchLength = match[0].length;
-    return txt.slice(0, charOffset) + 
-           `<strong>${txt.slice(charOffset, charOffset + matchLength)}</strong>` + 
+    return txt.slice(0, charOffset) +
+           `<strong>${txt.slice(charOffset, charOffset + matchLength)}</strong>` +
            txt.slice(charOffset + matchLength);
 }
 
@@ -208,7 +208,7 @@ function buildContext(resultItem, seg, segmentMap) {
 
     const ctx = document.createElement('div');
     ctx.className = 'context-container';
-    
+
     // Get segments before and after from the segmentMap
     const getSegments = () => {
         const segments = [];
@@ -232,7 +232,7 @@ function buildContext(resultItem, seg, segmentMap) {
             const text = shouldHighlight ? highlightQuery(s.text, charOffset) : s.text;
             return `
                 <div class="context-segment ${s.segment_index === curIdx ? 'current-segment' : ''}"
-                     data-start="${s.start_sec}" 
+                     data-start="${s.start_sec}"
                      data-end="${s.end_sec}"
                      data-seg="${s.segment_index}">
                     ${text}
@@ -243,7 +243,7 @@ function buildContext(resultItem, seg, segmentMap) {
 
     // Initial loading state
     ctx.innerHTML = '<div class="loading">Loading context...</div>';
-    
+
     // Find the result text container and append the context
     const resultTextContainer = resultItem.querySelector('.result-text-container');
     if (resultTextContainer) {
@@ -263,7 +263,7 @@ function buildContext(resultItem, seg, segmentMap) {
     // Get and render segments from the map
     const segments = getSegments();
     ctx.innerHTML = renderSegments(segments);
-    
+
     // Add click handlers to all segments
     ctx.querySelectorAll('.context-segment').forEach(segment => {
         segment.addEventListener('click', e => {
@@ -377,7 +377,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Collect all result items first
     const resultItems = Array.from(document.querySelectorAll('.result-item'));
-    
+
     // Create audio players for all results
     resultItems.forEach((item, index) => {
         // Add hit index to the result item
@@ -414,7 +414,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const src = document.createElement('source');
         src.src = audioUrl;
         src.type = 'audio/ogg; codecs=opus';
-        
+
         audio.appendChild(src);
         audioContainer.appendChild(audio);
 
@@ -509,7 +509,7 @@ function setupLazyLoading() {
 
 async function fetchSegmentsByCharBatch(lookups) {
     if (lookups.length === 0) return [];
-    
+
     console.log(`Fetching ${lookups.length} segments by char in batch`);
     try {
         const response = await fetch('/search/segment', {
@@ -517,7 +517,7 @@ async function fetchSegmentsByCharBatch(lookups) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ lookups })
         });
-        
+
         const results = await response.json();
         console.log(`Received ${results.length} segments from batch request`);
         return results;

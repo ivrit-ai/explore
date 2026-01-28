@@ -69,7 +69,7 @@
 {# ―― general stats ―― #}
 <div class="stats">
   {% if pagination.total_results > 0 %}
-    <span>נמצאו {{ pagination.total_results }} תוצאות</span>
+    <span>נמצאו {{ "{:,}".format(pagination.total_results) }} תוצאות</span>
   {% else %}
     לא נמצאו תוצאות
   {% endif %}
@@ -92,7 +92,7 @@
       <h2>סינון תוצאות</h2>
       <button id="filter-panel-toggle" class="filter-panel-toggle" aria-label="סגור/פתח פאנל סינון">×</button>
     </div>
-    
+
     <div class="filter-panel-content">
       {# Date Range Filter #}
       <div class="filter-section">
@@ -118,6 +118,28 @@
         </div>
       </div>
 
+      {# Position Filter #}
+      <div class="filter-section">
+        <h3>מיקום בקטע</h3>
+        <div class="filter-position-list">
+          <div class="filter-position-item">
+            <input type="checkbox" id="filter-pos-start" value="1"
+                   {% if position_filters and 'start' in position_filters %}checked{% endif %}>
+            <label for="filter-pos-start">בתחילת קטע</label>
+          </div>
+          <div class="filter-position-item">
+            <input type="checkbox" id="filter-pos-end" value="1"
+                   {% if position_filters and 'end' in position_filters %}checked{% endif %}>
+            <label for="filter-pos-end">בסוף קטע</label>
+          </div>
+          <div class="filter-position-item">
+            <input type="checkbox" id="filter-pos-cross" value="1"
+                   {% if position_filters and 'cross' in position_filters %}checked{% endif %}>
+            <label for="filter-pos-cross">חוצה קטעים</label>
+          </div>
+        </div>
+      </div>
+
       {# Apply Filters Button #}
       <button id="apply-filters-btn" class="btn btn-apply-filters" type="button">החל סינון</button>
 
@@ -137,7 +159,10 @@
       <button id="filter-panel-open" class="btn btn-filter-toggle">סינון תוצאות</button>
       <a href="{{ url_for('export.export_results_csv', q=query, search_mode=search_mode,
                           date_from=date_from, date_to=date_to, sources=sources_param,
-                          ignore_punct='1' if ignore_punct else '') }}"
+                          ignore_punct='1' if ignore_punct else '',
+                          pos_start='1' if position_filters and 'start' in position_filters else '',
+                          pos_end='1' if position_filters and 'end' in position_filters else '',
+                          pos_cross='1' if position_filters and 'cross' in position_filters else '') }}"
          class="btn btn-primary">ייצא את כל התוצאות ל-CSV</a>
     </div>
 
@@ -160,7 +185,7 @@
       </div>
 
       <!-- compact counter badge -->
-      <span class="result-count">{{ group.results|length }} תוצאות</span>
+      <span class="result-count">{{ "{:,}".format(group.results|length) }} תוצאות</span>
 
       <!-- leave the player placeholder last so it hugs the left in RTL -->
       <div class="audio-container source-audio-container"

@@ -1,15 +1,13 @@
-import os
-from urllib.parse import unquote
-from typing import Optional, List
-from flask import current_app
-from pathlib import Path
-from dataclasses import dataclass
-from typing import NamedTuple
 import gzip
-import orjson
 import logging
+import os
+from pathlib import Path
+from typing import NamedTuple
 
-_JSON_FILENAME = "full_transcript.json.gz"          # gzipped transcripts
+import orjson
+from flask import current_app
+
+_JSON_FILENAME = "full_transcript.json.gz"  # gzipped transcripts
 
 
 class FileRecord(NamedTuple):
@@ -18,19 +16,19 @@ class FileRecord(NamedTuple):
 
     def read_json(self) -> dict | list:
         """Read and parse the gzipped JSON file."""
-        with gzip.open(self.json_path, 'rb') as fh:
+        with gzip.open(self.json_path, "rb") as fh:
             return orjson.loads(fh.read())
 
 
-def get_transcripts(root: Path) -> List[FileRecord]:
+def get_transcripts(root: Path) -> list[FileRecord]:
     """Find all full_transcript.json.gz files and return a records list.
-    
+
     Args:
         root: Root directory to search for transcript files
-        
+
     Returns:
         List of FileRecord objects, one per transcript JSON file
-        
+
     Supports both legacy flat files:   <id>.json.gz
     and new nested files:            <source>/<id>/full_transcript.json.gz
     """
@@ -53,30 +51,30 @@ def get_transcripts(root: Path) -> List[FileRecord]:
     return recs
 
 
-def resolve_audio_path(source: str) -> Optional[str]:
+def resolve_audio_path(source: str) -> str | None:
     """
     Resolve the path to an audio file based on source.
-    
+
     Args:
         source: The source identifier
-        
+
     Returns:
         The full path to the audio file if it exists, None otherwise.
         Audio files are expected to be stored as: audio_dir/source/source.opus
         Handles URL decoding if the file doesn't exist initially.
     """
     # Get audio directory from Flask app config
-    audio_dir = current_app.config.get('AUDIO_DIR')
+    audio_dir = current_app.config.get("AUDIO_DIR")
     if not audio_dir:
         return None
 
     # Construct the direct path to the audio file based on source
     # Audio files are stored as: audio_dir/source/episode.opus
-    source_parts = source.split('/')
+    source_parts = source.split("/")
     audio_path = os.path.join(audio_dir, *source_parts)
-    
-    if not audio_path.endswith('.opus'):
-        audio_path += '.opus'
-    
+
+    if not audio_path.endswith(".opus"):
+        audio_path += ".opus"
+
     # Return the path if file exists, None otherwise
-    return audio_path if os.path.exists(audio_path) else None 
+    return audio_path if os.path.exists(audio_path) else None
