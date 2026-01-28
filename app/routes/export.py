@@ -39,6 +39,9 @@ def export_results_csv():
     if search_mode not in ['exact', 'partial', 'regex']:
         search_mode = 'exact'
 
+    # Get ignore punctuation option
+    ignore_punct = request.args.get('ignore_punct', '0').strip() == '1'
+
     # Get filter parameters
     date_from = request.args.get('date_from', '').strip() or None
     date_to = request.args.get('date_to', '').strip() or None
@@ -50,9 +53,10 @@ def export_results_csv():
         sources = [s.strip() for s in sources_param.split(',') if s.strip()]
 
     # Perform search with filters
-    logger.info(f"Performing search for CSV export: {query} (mode: {search_mode}, filters: date_from={date_from}, date_to={date_to}, sources={sources})")
+    logger.info(f"Performing search for CSV export: {query} (mode: {search_mode}, filters: date_from={date_from}, date_to={date_to}, sources={sources}, ignore_punct={ignore_punct})")
     hits = search_service.search(query, search_mode=search_mode,
-                                 date_from=date_from, date_to=date_to, sources=sources)
+                                 date_from=date_from, date_to=date_to, sources=sources,
+                                 ignore_punct=ignore_punct)
     
     # Enrich hits with segment info
     all_results = []
@@ -143,6 +147,8 @@ def export_results_csv():
         writer.writerow(['# Date To:', date_to])
     if sources:
         writer.writerow(['# Sources Filter:', ', '.join(sources)])
+    if ignore_punct:
+        writer.writerow(['# Ignore Punctuation:', 'Yes'])
     writer.writerow(['# Total Results:', len(all_results)])
     writer.writerow(['# Exported:', datetime.now().strftime('%Y-%m-%d %H:%M:%S')])
     writer.writerow([])  # Empty row for separation

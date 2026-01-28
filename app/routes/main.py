@@ -47,6 +47,9 @@ def search():
     if search_mode not in ['exact', 'partial', 'regex']:
         search_mode = 'exact'
 
+    # Get ignore punctuation option
+    ignore_punct = request.args.get('ignore_punct', '0').strip() == '1'
+
     # Get filter parameters from request
     date_from = request.args.get('date_from', '').strip() or None
     date_to = request.args.get('date_to', '').strip() or None
@@ -89,7 +92,7 @@ def search():
 
     # Apply filters to search with search mode
     hits = search_service.search(query, search_mode=search_mode, date_from=date_from,
-                                date_to=date_to, sources=sources)
+                                date_to=date_to, sources=sources, ignore_punct=ignore_punct)
     total = len(hits)
 
     # simple slicing
@@ -167,7 +170,8 @@ def search():
                            date_from=date_from,
                            date_to=date_to,
                            sources=sources,
-                           sources_param=sources_param)
+                           sources_param=sources_param,
+                           ignore_punct=ignore_punct)
 
 @bp.route('/search/metadata')
 @login_required
@@ -184,6 +188,9 @@ def search_metadata():
     if search_mode not in ['exact', 'partial', 'regex']:
         search_mode = 'exact'
 
+    # Get ignore punctuation option
+    ignore_punct = request.args.get('ignore_punct', '0').strip() == '1'
+
     global search_service, file_records
     if file_records is None:
         from ..utils import get_transcripts
@@ -196,7 +203,7 @@ def search_metadata():
         search_service = SearchService(IndexManager(file_records, db_type=db_type))
 
     # Get ALL hits (not paginated) using the specified search mode
-    hits = search_service.search(query, search_mode=search_mode)
+    hits = search_service.search(query, search_mode=search_mode, ignore_punct=ignore_punct)
 
     # Extract metadata from all hits
     sources = defaultdict(int)  # source -> count

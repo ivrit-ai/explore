@@ -207,7 +207,8 @@ class TranscriptIndex:
         return result[0]
 
     def search_hits(self, query: str, search_mode: str = 'partial', date_from: Optional[str] = None,
-                   date_to: Optional[str] = None, sources: Optional[list[str]] = None) -> list[tuple[int, int]]:
+                   date_to: Optional[str] = None, sources: Optional[list[str]] = None,
+                   ignore_punct: bool = False) -> list[tuple[int, int]]:
         """Search for query and return (episode_idx, char_offset) pairs for hits.
 
         Args:
@@ -216,8 +217,9 @@ class TranscriptIndex:
             date_from: Optional start date filter (YYYY-MM-DD format)
             date_to: Optional end date filter (YYYY-MM-DD format)
             sources: Optional list of sources to filter by
+            ignore_punct: If True, ignore punctuation between words when matching
         """
-        return self._search_fts5(query, search_mode, date_from, date_to, sources)
+        return self._search_fts5(query, search_mode, date_from, date_to, sources, ignore_punct)
 
     def _search_sqlite_simple(self, query: str, search_mode: str = 'partial', date_from: Optional[str] = None,
                              date_to: Optional[str] = None, sources: Optional[list[str]] = None) -> list[tuple[int, int]]:
@@ -290,21 +292,22 @@ class TranscriptIndex:
 
     def _search_fts5(self, query: str, search_mode: str = 'partial',
                      date_from: Optional[str] = None, date_to: Optional[str] = None,
-                     sources: Optional[list[str]] = None) -> list[tuple[int, int]]:
+                     sources: Optional[list[str]] = None,
+                     ignore_punct: bool = False) -> list[tuple[int, int]]:
         """Search using FTS5 with mode-specific strategies."""
         log = logging.getLogger("index")
-        log.info(f"FTS5 search: query={query}, mode={search_mode}")
+        log.info(f"FTS5 search: query={query}, mode={search_mode}, ignore_punct={ignore_punct}")
 
         if search_mode == 'exact':
-            return self._search_fts5_exact(query, date_from, date_to, sources)
+            return self._search_fts5_exact(query, date_from, date_to, sources, ignore_punct)
         elif search_mode == 'partial':
-            return self._search_fts5_partial(query, date_from, date_to, sources)
+            return self._search_fts5_partial(query, date_from, date_to, sources, ignore_punct)
         elif search_mode == 'regex':
             return self._search_fts5_regex(query, date_from, date_to, sources)
         else:
             raise ValueError(f"Unknown search mode: {search_mode}")
 
-    def _search_fts5_exact(self, query: str, date_from, date_to, sources):
+    def _search_fts5_exact(self, query: str, date_from, date_to, sources, ignore_punct: bool = False):
         """Exact word match using FTS5 phrase query."""
         import regex
 
@@ -343,7 +346,13 @@ class TranscriptIndex:
 
         # Extract character offsets using word boundary regex
         hits = []
-        pattern = r'\b' + regex.escape(query) + r'\b'
+        if ignore_punct:
+            tokens = query.split()
+            escaped_tokens = [regex.escape(t) for t in tokens]
+            inner = r'[\p{P}\s]+'.join(escaped_tokens) if len(tokens) > 1 else escaped_tokens[0]
+            pattern = r'\b' + inner + r'\b'
+        else:
+            pattern = r'\b' + regex.escape(query) + r'\b'
         compiled_pattern = regex.compile(pattern)
 
         for doc_id, full_text in results:
@@ -353,7 +362,7 @@ class TranscriptIndex:
         log.info(f"Exact search completed: {len(hits)} hits from {len(results)} candidates")
         return hits
 
-    def _search_fts5_partial(self, query: str, date_from, date_to, sources):
+    def _search_fts5_partial(self, query: str, date_from, date_to, sources, ignore_punct: bool = False):
         """Partial/substring match using FTS5 prefix matching."""
         import regex
 
@@ -391,7 +400,14 @@ class TranscriptIndex:
 
         # Python substring search on candidates
         hits = []
-        escaped_pattern = regex.escape(query)
+        if ignore_punct:
+            parts = query.split()
+            if len(parts) > 1:
+                escaped_pattern = r'[\p{P}\s]+'.join(regex.escape(p) for p in parts)
+            else:
+                escaped_pattern = regex.escape(query)
+        else:
+            escaped_pattern = regex.escape(query)
         compiled_pattern = regex.compile(escaped_pattern)
 
         for doc_id, full_text in results:

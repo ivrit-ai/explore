@@ -44,6 +44,13 @@ Yanir Marmor, Yair Lifshitz, Yoad Snapir, and Kinneret Misgav. 2025. Building an
                     </label>
                 </div>
             </div>
+            <div class="punct-option">
+                <label class="radio-option">
+                    <input type="checkbox" name="ignore_punct" id="ignore-punct" value="1">
+                    <span>התעלם מפיסוק</span>
+                    <span class="radio-tooltip">התעלם מסימני פיסוק בטקסט (פסיקים, נקודות, מקפים וכו')</span>
+                </label>
+            </div>
             <div class="input-container">
                 <label for="max-results">מקסימום תוצאות לעמוד:</label>
                 <input type="number" name="max_results_per_page" id="max-results" value="1000" min="1" max="5000">
@@ -147,5 +154,16 @@ function validateSearch(event) {
     document.getElementById('searchSpinner').classList.add('active');
     return true;
 }
+
+document.querySelectorAll('input[name="search_mode"]').forEach(function(radio) {
+    radio.addEventListener('change', function() {
+        var cb = document.getElementById('ignore-punct');
+        if (cb) {
+            cb.disabled = (this.value === 'regex');
+            if (this.value === 'regex') cb.checked = false;
+            cb.closest('.punct-option').style.opacity = this.value === 'regex' ? '0.5' : '1';
+        }
+    });
+});
 </script>
 {% endblock %} 

@@ -21,16 +21,21 @@ function getUrlParams() {
         dateTo: urlParams.get('date_to') || '',
         sources: urlParams.get('sources') || '',
         page: urlParams.get('page') || '1',
-        maxResults: urlParams.get('max_results_per_page') || '1000'
+        maxResults: urlParams.get('max_results_per_page') || '1000',
+        ignorePunct: urlParams.get('ignore_punct') || ''
     };
 }
 
 /* ========================
    Fetch Metadata from API
    ======================== */
-async function fetchMetadata(query, searchMode) {
+async function fetchMetadata(query, searchMode, ignorePunct) {
     try {
-        const response = await fetch(`/search/metadata?q=${encodeURIComponent(query)}&search_mode=${encodeURIComponent(searchMode)}`);
+        let url = `/search/metadata?q=${encodeURIComponent(query)}&search_mode=${encodeURIComponent(searchMode)}`;
+        if (ignorePunct) {
+            url += `&ignore_punct=${encodeURIComponent(ignorePunct)}`;
+        }
+        const response = await fetch(url);
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
@@ -54,7 +59,7 @@ async function initializeFilters() {
     }
 
     // Fetch full metadata from API (for populating source checkboxes)
-    const metadata = await fetchMetadata(params.query, params.searchMode);
+    const metadata = await fetchMetadata(params.query, params.searchMode, params.ignorePunct);
 
     if (metadata && metadata.sources && metadata.date_range) {
         filterState.fullMetadata = metadata;
@@ -194,6 +199,13 @@ function applyFilters() {
     url.searchParams.set('max_results_per_page', params.maxResults);
     url.searchParams.set('page', '1'); // Reset to page 1 when applying filters
 
+    // Preserve ignore_punct setting
+    if (params.ignorePunct) {
+        url.searchParams.set('ignore_punct', params.ignorePunct);
+    } else {
+        url.searchParams.delete('ignore_punct');
+    }
+
     // Set filter parameters
     if (dateFrom) {
         url.searchParams.set('date_from', dateFrom);
@@ -224,12 +236,17 @@ function applyFilters() {
 function clearFilters() {
     const params = getUrlParams();
 
-    // Build URL without filter parameters (but keep search mode)
+    // Build URL without filter parameters (but keep search mode and ignore_punct)
     const url = new URL(window.location.href);
     url.searchParams.set('q', params.query);
     url.searchParams.set('search_mode', params.searchMode);
     url.searchParams.set('max_results_per_page', params.maxResults);
     url.searchParams.set('page', '1');
+    if (params.ignorePunct) {
+        url.searchParams.set('ignore_punct', params.ignorePunct);
+    } else {
+        url.searchParams.delete('ignore_punct');
+    }
     url.searchParams.delete('date_from');
     url.searchParams.delete('date_to');
     url.searchParams.delete('sources');

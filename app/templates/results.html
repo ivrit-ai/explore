@@ -42,6 +42,12 @@
           <input type="radio" name="search_mode" value="regex" {% if search_mode == 'regex' %}checked{% endif %}>
           <span>Regex</span>
         </label>
+        <label class="radio-option punct-option" {% if search_mode == 'regex' %}style="opacity: 0.5"{% endif %}>
+          <input type="checkbox" name="ignore_punct" id="ignore-punct" value="1"
+                 {% if ignore_punct %}checked{% endif %}
+                 {% if search_mode == 'regex' %}disabled{% endif %}>
+          <span>התעלם מפיסוק</span>
+        </label>
       </div>
     </div>
     <div class="input-container">
@@ -130,7 +136,8 @@
     <div class="export-controls">
       <button id="filter-panel-open" class="btn btn-filter-toggle">סינון תוצאות</button>
       <a href="{{ url_for('export.export_results_csv', q=query, search_mode=search_mode,
-                          date_from=date_from, date_to=date_to, sources=sources_param) }}"
+                          date_from=date_from, date_to=date_to, sources=sources_param,
+                          ignore_punct='1' if ignore_punct else '') }}"
          class="btn btn-primary">ייצא את כל התוצאות ל-CSV</a>
     </div>
 
@@ -224,6 +231,17 @@ document.querySelector('.search-form').addEventListener('submit', function() {
 });
 document.getElementById('apply-filters-btn').addEventListener('click', function() {
     document.getElementById('searchSpinner').classList.add('active');
+});
+
+document.querySelectorAll('input[name="search_mode"]').forEach(function(radio) {
+    radio.addEventListener('change', function() {
+        var cb = document.getElementById('ignore-punct');
+        if (cb) {
+            cb.disabled = (this.value === 'regex');
+            if (this.value === 'regex') cb.checked = false;
+            cb.closest('.punct-option').style.opacity = this.value === 'regex' ? '0.5' : '1';
+        }
+    });
 });
 </script>
 <script>
