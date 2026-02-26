@@ -318,7 +318,8 @@ class TranscriptIndex:
 
     def search_hits(self, query: str, search_mode: str = 'partial', date_from: Optional[str] = None,
                    date_to: Optional[str] = None, sources: Optional[list[str]] = None,
-                   doc_limit: int = 0, doc_offset: int = 0) -> tuple[list[tuple[int, int]], bool]:
+                   doc_limit: int = 0, doc_offset: int = 0,
+                   seed: Optional[int] = None) -> tuple[list[tuple[int, int]], bool]:
         """Search for query and return (episode_idx, char_offset) pairs for hits.
 
         Args:
@@ -329,13 +330,14 @@ class TranscriptIndex:
             sources: Optional list of sources to filter by
             doc_limit: Max number of documents to scan (0 = unlimited)
             doc_offset: Number of documents to skip (for pagination)
+            seed: Optional seed for shuffling results (None = no shuffle)
 
         Returns:
             Tuple of (hits list, has_more boolean)
         """
         log = logging.getLogger("index")
         t_start = time.perf_counter()
-        hits, has_more = self._search_fts5(query, search_mode, date_from, date_to, sources, doc_limit, doc_offset)
+        hits, has_more = self._search_fts5(query, search_mode, date_from, date_to, sources, doc_limit, doc_offset, seed=seed)
         t_total = time.perf_counter() - t_start
         log.info(f"[BENCH] search_hits total: {t_total*1000:.1f}ms, {len(hits)} hits, has_more={has_more}")
         return hits, has_more
@@ -412,23 +414,145 @@ class TranscriptIndex:
     def _search_fts5(self, query: str, search_mode: str = 'partial',
                      date_from: Optional[str] = None, date_to: Optional[str] = None,
                      sources: Optional[list[str]] = None,
-                     doc_limit: int = 0, doc_offset: int = 0) -> tuple[list[tuple[int, int]], bool]:
-        """Search using FTS5 with mode-specific strategies."""
-        log = logging.getLogger("index")
-        log.info(f"FTS5 search: query={query}, mode={search_mode}, doc_limit={doc_limit}, doc_offset={doc_offset}")
+                     doc_limit: int = 0, doc_offset: int = 0,
+                     seed: Optional[int] = None) -> tuple[list[tuple[int, int]], bool]:
+        """Unified FTS5 search pipeline.
 
-        if search_mode == 'exact':
-            return self._search_fts5_exact(query, date_from, date_to, sources, doc_limit, doc_offset)
-        elif search_mode == 'partial':
-            return self._search_fts5_partial(query, date_from, date_to, sources, doc_limit, doc_offset)
-        elif search_mode == 'regex':
-            return self._search_fts5_regex(query, date_from, date_to, sources, doc_limit, doc_offset)
-        else:
+        All search modes (exact/partial/regex) and shuffle follow the same flow:
+          1. Build FTS5 MATCH expression + candidate SQL
+          2. Get matching doc_ids  (lightweight — no full_text)
+          3. Paginate: SQL LIMIT/OFFSET (normal) or seeded shuffle + slice (shuffle)
+          4. Fetch full_text for the page's doc_ids
+          5. Regex post-filter to find exact hit offsets
+
+        Args:
+            seed: When not None, shuffle doc_ids with this seed instead of using
+                  SQL LIMIT/OFFSET for pagination.
+        """
+        import random as random_mod
+        import regex
+
+        log = logging.getLogger("index")
+        log.info(f"FTS5 search: query={query}, mode={search_mode}, "
+                 f"doc_limit={doc_limit}, doc_offset={doc_offset}, seed={seed}")
+
+        if search_mode not in ('exact', 'partial', 'regex'):
             raise ValueError(f"Unknown search mode: {search_mode}")
+
+        # ── 1. Build FTS query & candidate SQL ──────────────────────────
+        fts_query = self._build_fts_query(query, search_mode)
+
+        if fts_query is not None:
+            sql = """
+                SELECT DISTINCT m.doc_id
+                FROM documents_fts fts
+                JOIN fts_doc_mapping m ON fts.rowid = m.fts_rowid
+                JOIN documents d ON m.doc_id = d.doc_id
+                WHERE documents_fts MATCH ?
+            """
+            params: list = [fts_query]
+        else:
+            # regex with no extractable tokens — full scan
+            log.warning(f"Regex pattern '{query}' has no extractable tokens - full scan")
+            sql = """
+                SELECT DISTINCT d.doc_id
+                FROM documents_fts fts
+                JOIN fts_doc_mapping m ON fts.rowid = m.fts_rowid
+                JOIN documents d ON m.doc_id = d.doc_id
+                WHERE 1=1
+            """
+            params = []
+
+        sql, params = self._append_filters(sql, params, date_from, date_to, sources)
+
+        # ── 2. Get matching doc_ids ─────────────────────────────────────
+        if seed is None:
+            # Normal mode: let the DB handle pagination
+            if doc_limit:
+                sql += " LIMIT ? OFFSET ?"
+                params.extend([doc_limit + 1, doc_offset])  # +1 for has_more
+            elif doc_offset:
+                sql += " LIMIT -1 OFFSET ?"
+                params.append(doc_offset)
+
+        t_ids = time.perf_counter()
+        cursor = self._db.execute(sql, params)
+        doc_ids = [row[0] for row in cursor]
+        t_ids_done = time.perf_counter()
+        log.info(f"[BENCH] doc_ids: {((t_ids_done-t_ids)*1000):.1f}ms, {len(doc_ids)} ids")
+
+        if not doc_ids:
+            return [], False
+
+        # ── 3. Paginate ─────────────────────────────────────────────────
+        if seed is not None:
+            rng = random_mod.Random(seed)
+            rng.shuffle(doc_ids)
+            fetch_limit = doc_limit if doc_limit else len(doc_ids)
+            page_ids = doc_ids[doc_offset:doc_offset + fetch_limit + 1]
+            has_more = len(page_ids) > fetch_limit
+            if has_more:
+                page_ids = page_ids[:fetch_limit]
+        else:
+            # DB already paginated; detect has_more from extra row
+            if doc_limit and len(doc_ids) > doc_limit:
+                has_more = True
+                page_ids = doc_ids[:doc_limit]
+            else:
+                has_more = False
+                page_ids = doc_ids
+
+        if not page_ids:
+            return [], False
+
+        # ── 4. Fetch full_text for page doc_ids ────────────────────────
+        placeholders = ','.join('?' * len(page_ids))
+        sql2 = f"""
+            SELECT m.doc_id, fts.full_text
+            FROM documents_fts fts
+            JOIN fts_doc_mapping m ON fts.rowid = m.fts_rowid
+            WHERE m.doc_id IN ({placeholders})
+        """
+        t_text = time.perf_counter()
+        cursor2 = self._db.execute(sql2, page_ids)
+        docs = {row[0]: row[1] for row in cursor2}
+        t_text_done = time.perf_counter()
+        log.info(f"[BENCH] full_text: {((t_text_done-t_text)*1000):.1f}ms, {len(docs)} docs")
+
+        # ── 5. Regex post-filter ────────────────────────────────────────
+        if search_mode == 'exact':
+            pattern = r'\b' + regex.escape(query) + r'\b'
+        elif search_mode == 'partial':
+            pattern = regex.escape(query)
+        else:
+            pattern = query
+
+        try:
+            compiled = regex.compile(pattern)
+        except regex.error as e:
+            log.error(f"Invalid regex pattern: {query}, error: {e}")
+            return [], False
+
+        hits = []
+        t_scan = time.perf_counter()
+        for doc_id in page_ids:
+            full_text = docs.get(doc_id)
+            if full_text is None:
+                continue
+            for match in compiled.finditer(full_text):
+                hits.append((doc_id, match.start()))
+        t_scan_done = time.perf_counter()
+
+        log.info(f"[BENCH] {search_mode}{' shuffle' if seed is not None else ''}: "
+                 f"ids={((t_ids_done-t_ids)*1000):.1f}ms, "
+                 f"text={((t_text_done-t_text)*1000):.1f}ms, "
+                 f"scan={((t_scan_done-t_scan)*1000):.1f}ms ({len(page_ids)} docs), "
+                 f"{len(hits)} hits, has_more={has_more}")
+        return hits, has_more
 
     @staticmethod
     def _append_filters(sql, params, date_from, date_to, sources):
-        """Append date/source WHERE clauses and LIMIT/OFFSET to SQL."""
+        """Append date/source WHERE clauses to SQL."""
         if date_from:
             sql += " AND d.episode_date >= ?"
             params.append(date_from)
@@ -441,164 +565,24 @@ class TranscriptIndex:
             params.extend(sources)
         return sql, params
 
-    def _execute_fts_query(self, sql, params, doc_limit, doc_offset):
-        """Add LIMIT/OFFSET for document pagination and execute.
+    def _build_fts_query(self, query: str, search_mode: str) -> Optional[str]:
+        """Build the FTS5 MATCH expression for the given query and mode.
 
-        Fetches doc_limit+1 rows to detect has_more. Returns (cursor_rows, has_more).
+        Returns None when regex mode has no extractable tokens (full-scan needed).
         """
-        if doc_limit:
-            # Fetch one extra to detect if more docs exist
-            sql += " LIMIT ? OFFSET ?"
-            params.extend([doc_limit + 1, doc_offset])
-        elif doc_offset:
-            sql += " LIMIT -1 OFFSET ?"
-            params.append(doc_offset)
-
-        t_fts = time.perf_counter()
-        cursor = self._db.execute(sql, params)
-        t_fts_done = time.perf_counter()
-        return cursor, t_fts, t_fts_done
-
-    def _search_fts5_exact(self, query: str, date_from, date_to, sources,
-                           doc_limit: int = 0, doc_offset: int = 0):
-        """Exact word match using FTS5 phrase query."""
         import regex
-
-        log = logging.getLogger("index")
-
-        escaped_query = query.replace('"', '""')
-        fts_query = f'"{escaped_query}"'
-
-        sql = """
-            SELECT m.doc_id, fts.full_text
-            FROM documents_fts fts
-            JOIN fts_doc_mapping m ON fts.rowid = m.fts_rowid
-            JOIN documents d ON m.doc_id = d.doc_id
-            WHERE documents_fts MATCH ?
-        """
-        params = [fts_query]
-        sql, params = self._append_filters(sql, params, date_from, date_to, sources)
-        cursor, t_fts, t_fts_done = self._execute_fts_query(sql, params, doc_limit, doc_offset)
-
-        hits = []
-        has_more = False
-        docs_scanned = 0
-        pattern = r'\b' + regex.escape(query) + r'\b'
-        compiled_pattern = regex.compile(pattern)
-
-        t_scan = time.perf_counter()
-        for doc_id, full_text in cursor:
-            docs_scanned += 1
-            if doc_limit and docs_scanned > doc_limit:
-                has_more = True
-                break
-            for match in compiled_pattern.finditer(full_text):
-                hits.append((doc_id, match.start()))
-        t_scan_done = time.perf_counter()
-
-        log.info(f"[BENCH] exact: FTS5={((t_fts_done-t_fts)*1000):.1f}ms, "
-                 f"scan={((t_scan_done-t_scan)*1000):.1f}ms ({docs_scanned} docs), "
-                 f"{len(hits)} hits, has_more={has_more}")
-        return hits, has_more
-
-    def _search_fts5_partial(self, query: str, date_from, date_to, sources,
-                            doc_limit: int = 0, doc_offset: int = 0):
-        """Partial/substring match using FTS5 prefix matching."""
-        import regex
-
-        log = logging.getLogger("index")
-
-        escaped_query = query.replace('"', '""')
-        tokens = escaped_query.split()
-        fts_query = ' OR '.join([f'{token}*' for token in tokens])
-
-        sql = """
-            SELECT m.doc_id, fts.full_text
-            FROM documents_fts fts
-            JOIN fts_doc_mapping m ON fts.rowid = m.fts_rowid
-            JOIN documents d ON m.doc_id = d.doc_id
-            WHERE documents_fts MATCH ?
-        """
-        params = [fts_query]
-        sql, params = self._append_filters(sql, params, date_from, date_to, sources)
-        cursor, t_fts, t_fts_done = self._execute_fts_query(sql, params, doc_limit, doc_offset)
-
-        hits = []
-        has_more = False
-        docs_scanned = 0
-        escaped_pattern = regex.escape(query)
-        compiled_pattern = regex.compile(escaped_pattern)
-
-        t_scan = time.perf_counter()
-        for doc_id, full_text in cursor:
-            docs_scanned += 1
-            if doc_limit and docs_scanned > doc_limit:
-                has_more = True
-                break
-            for match in compiled_pattern.finditer(full_text):
-                hits.append((doc_id, match.start()))
-        t_scan_done = time.perf_counter()
-
-        log.info(f"[BENCH] partial: FTS5={((t_fts_done-t_fts)*1000):.1f}ms, "
-                 f"scan={((t_scan_done-t_scan)*1000):.1f}ms ({docs_scanned} docs), "
-                 f"{len(hits)} hits, has_more={has_more}")
-        return hits, has_more
-
-    def _search_fts5_regex(self, query: str, date_from, date_to, sources,
-                          doc_limit: int = 0, doc_offset: int = 0):
-        """Regex search with FTS5 candidate narrowing."""
-        import regex
-
-        log = logging.getLogger("index")
-
-        potential_tokens = regex.findall(r'\w{2,}', query)
-
-        if potential_tokens:
-            fts_query = ' AND '.join([f'{token}*' for token in potential_tokens[:3]])
-            sql = """
-                SELECT m.doc_id, fts.full_text
-                FROM documents_fts fts
-                JOIN fts_doc_mapping m ON fts.rowid = m.fts_rowid
-                JOIN documents d ON m.doc_id = d.doc_id
-                WHERE documents_fts MATCH ?
-            """
-            params = [fts_query]
-        else:
-            log.warning(f"Regex pattern '{query}' has no extractable tokens - full scan")
-            sql = """
-                SELECT d.doc_id, fts.full_text
-                FROM documents_fts fts
-                JOIN fts_doc_mapping m ON fts.rowid = m.fts_rowid
-                JOIN documents d ON m.doc_id = d.doc_id
-                WHERE 1=1
-            """
-            params = []
-
-        sql, params = self._append_filters(sql, params, date_from, date_to, sources)
-        cursor, t_fts, t_fts_done = self._execute_fts_query(sql, params, doc_limit, doc_offset)
-
-        hits = []
-        has_more = False
-        docs_scanned = 0
-        t_scan = time.perf_counter()
-        try:
-            compiled_regex = regex.compile(query)
-            for doc_id, full_text in cursor:
-                docs_scanned += 1
-                if doc_limit and docs_scanned > doc_limit:
-                    has_more = True
-                    break
-                for match in compiled_regex.finditer(full_text):
-                    hits.append((doc_id, match.start()))
-        except regex.error as e:
-            log.error(f"Invalid regex pattern: {query}, error: {e}")
-            return [], False
-        t_scan_done = time.perf_counter()
-
-        log.info(f"[BENCH] regex: FTS5={((t_fts_done-t_fts)*1000):.1f}ms, "
-                 f"scan={((t_scan_done-t_scan)*1000):.1f}ms ({docs_scanned} docs), "
-                 f"{len(hits)} hits, has_more={has_more}")
-        return hits, has_more
+        if search_mode == 'exact':
+            escaped = query.replace('"', '""')
+            return f'"{escaped}"'
+        elif search_mode == 'partial':
+            escaped = query.replace('"', '""')
+            tokens = escaped.split()
+            return ' OR '.join([f'{t}*' for t in tokens])
+        else:  # regex
+            potential_tokens = regex.findall(r'\w{2,}', query)
+            if potential_tokens:
+                return ' AND '.join([f'{t}*' for t in potential_tokens[:3]])
+            return None
 
 
 def _setup_schema(db: DatabaseService):

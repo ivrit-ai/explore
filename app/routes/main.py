@@ -1,10 +1,12 @@
 from fastapi import APIRouter, Request, Query, Depends
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from ..routes.auth import require_login
 from ..templating import render
 import time
 import os
+import random
 import logging
+from urllib.parse import urlencode
 from collections import defaultdict
 
 logger = logging.getLogger(__name__)
@@ -30,6 +32,8 @@ def search(
     date_from: str = Query(''),
     date_to: str = Query(''),
     sources: str = Query(''),
+    shuffle: str = Query(''),
+    seed: str = Query(''),
     user_email: str = Depends(require_login),
 ):
     query = q.strip()
@@ -45,6 +49,17 @@ def search(
     # Validate search mode
     if search_mode not in ['exact', 'partial', 'regex']:
         search_mode = 'exact'
+
+    # Handle shuffle: if shuffle requested but no seed, redirect with a random seed
+    shuffle_on = shuffle.strip() == '1'
+    if shuffle_on and not seed.strip():
+        new_seed = random.randint(0, 2**31 - 1)
+        params = dict(request.query_params)
+        params['seed'] = str(new_seed)
+        url = str(request.url_for('main.search')) + '?' + urlencode(params)
+        return RedirectResponse(url=url, status_code=302)
+
+    seed_val = int(seed.strip()) if shuffle_on and seed.strip() else None
 
     # Process filter parameters
     date_from_val = date_from.strip() or None
@@ -62,6 +77,7 @@ def search(
         query, search_mode=search_mode, date_from=date_from_val,
         date_to=date_to_val, sources=sources_list,
         doc_limit=per_page, doc_offset=doc_offset,
+        seed=seed_val,
     )
     total = len(hits)
 
@@ -154,7 +170,9 @@ def search(
                   date_from=date_from_val,
                   date_to=date_to_val,
                   sources=sources_list,
-                  sources_param=sources_param)
+                  sources_param=sources_param,
+                  shuffle='1' if shuffle_on else '',
+                  seed=seed.strip() if shuffle_on else '')
 
 
 @router.get('/search/metadata', name='main.search_metadata')

@@ -49,7 +49,15 @@
       <input type="number" name="max_results_per_page" id="max-results"
              value="{{ max_results_per_page|default(20) }}" min="1" max="5000">
     </div>
+    <div class="input-container">
+      <label class="radio-option">
+        <input type="checkbox" name="shuffle" value="1" {% if shuffle == '1' %}checked{% endif %}
+               onchange="document.getElementById('seed-input').value = '';">
+        <span>ערבוב</span>
+      </label>
+    </div>
   </div>
+  <input type="hidden" name="seed" id="seed-input" value="{{ seed }}">
   <button type="submit">חיפוש</button>
 </form>
 

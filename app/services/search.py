@@ -26,7 +26,8 @@ class SearchService:
     # ­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­­ #
     def search(self, query: str, search_mode: str = 'partial', date_from: str = None,
                date_to: str = None, sources: List[str] = None,
-               doc_limit: int = 0, doc_offset: int = 0) -> tuple[List[SearchHit], bool]:
+               doc_limit: int = 0, doc_offset: int = 0,
+               seed: int = None) -> tuple[List[SearchHit], bool]:
         """Search with optional filters and search mode.
 
         Args:
@@ -37,6 +38,7 @@ class SearchService:
             sources: Optional list of sources to filter by
             doc_limit: Max documents to scan per page (0 = unlimited)
             doc_offset: Documents to skip (for pagination)
+            seed: Optional seed for shuffling results (None = no shuffle)
 
         Returns:
             Tuple of (list of SearchHit, has_more boolean)
@@ -45,11 +47,12 @@ class SearchService:
         idx = self._index_mgr.get()
 
         logger.info(f"Starting search for query: '{query}', mode: {search_mode}, date_from: {date_from}, "
-                   f"date_to: {date_to}, sources: {sources}, doc_limit: {doc_limit}, doc_offset: {doc_offset}")
+                   f"date_to: {date_to}, sources: {sources}, doc_limit: {doc_limit}, doc_offset: {doc_offset}, seed: {seed}")
 
         hits_data, has_more = idx.search_hits(query, search_mode=search_mode, date_from=date_from,
                                     date_to=date_to, sources=sources,
-                                    doc_limit=doc_limit, doc_offset=doc_offset)
+                                    doc_limit=doc_limit, doc_offset=doc_offset,
+                                    seed=seed)
         hits = [SearchHit(episode_idx, char_offset) for episode_idx, char_offset in hits_data]
 
         total_time = time.perf_counter() - start_time
