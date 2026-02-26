@@ -50,6 +50,10 @@ def create_app(data_dir: str, index_file: str = None):
     # Import and register routers
     from .routes import auth, main, search, export, audio
 
+    # Initialize Google OAuth in production
+    if os.environ.get('APP_ENV') != 'development':
+        auth.init_oauth(app)
+
     app.include_router(auth.router)
     app.include_router(main.router)
     app.include_router(search.router, prefix="/search")
