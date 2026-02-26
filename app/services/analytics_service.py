@@ -47,9 +47,9 @@ class AnalyticsService:
 
         try:
             posthog.capture(
-                user_id or self._get_user_id(user_email=user_email),
-                event_name,
-                properties
+                distinct_id=user_id or self._get_user_id(user_email=user_email),
+                event=event_name,
+                properties=properties,
             )
             logger.debug(f"Captured event: {event_name}")
         except Exception as e:
