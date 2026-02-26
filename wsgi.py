@@ -9,7 +9,7 @@ from app.utils import get_transcripts
 
 # Parse arguments (supports --data-dir for compatibility)
 parser = argparse.ArgumentParser(description='Run the ivrit.ai Explore application')
-parser.add_argument('--data-dir', type=str, help='Path to the data directory', default='/root/data')
+parser.add_argument('--data-dir', type=str, help='Path to the data directory', default='/home/data/explore')
 args, unknown = parser.parse_known_args()
 
 data_dir = os.path.abspath(args.data_dir)

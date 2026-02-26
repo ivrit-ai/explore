@@ -1,4 +1,4 @@
-# run.py – bootstrap ivrit.ai Explore (new search pipeline 2025‑05)
+# run.py – bootstrap ivrit.ai Explore
 # ----------------------------------------------------------------------------
 # Usage examples:
 #   # First, build the index (one-time or when data changes):
@@ -6,7 +6,7 @@
 #
 #   # Then run the server:
 #   python run.py --data-dir ../data --dev          # http://localhost:5000
-#   python run.py --data-dir /srv/explore/data      # https + letsencrypt
+#   python run.py --data-dir /home/data/explore     # http://0.0.0.0:8200
 #
 #   # Or use auto-build for convenience (builds if DB doesn't exist):
 #   python run.py --data-dir ../data --dev --auto-build
@@ -21,23 +21,18 @@ import sys
 import time
 from pathlib import Path
 
-from app import create_app, init_index_manager
-from app.utils import get_transcripts
-
 # ---------------------------------------------------------------------------
 # 1. CLI parsing
 # ---------------------------------------------------------------------------
 parser = argparse.ArgumentParser(description="Run ivrit.ai Explore server")
 parser.add_argument("--data-dir", default="../data",
-                    help="Path holding 'json/' and 'audio/' sub‑dirs (default ../data)")
+                    help="Path holding 'json/' and 'audio/' sub-dirs (default ../data)")
 parser.add_argument("--auto-build", action="store_true",
                     help="Automatically build index if database doesn't exist")
-parser.add_argument("--port", type=int, default=443,
-                    help="Port to bind (443 for prod, 5000 dev)")
-parser.add_argument("--dev", action="store_true", help="Run in HTTP dev mode (no SSL)")
-parser.add_argument("--ssl-cert", default="/etc/letsencrypt/live/explore.ivrit.ai/fullchain.pem")
-parser.add_argument("--ssl-key",  default="/etc/letsencrypt/live/explore.ivrit.ai/privkey.pem")
-args = parser.parse_args()
+parser.add_argument("--port", type=int, default=8200,
+                    help="Port to bind (default 8200)")
+parser.add_argument("--dev", action="store_true", help="Run in dev mode (localhost:5000)")
+args, _unknown = parser.parse_known_args()
 
 # Set environment variables for dev mode
 if args.dev:
@@ -75,6 +70,9 @@ def timeit(name: str):
 # ---------------------------------------------------------------------------
 # 4. Initialise FastAPI + services
 # ---------------------------------------------------------------------------
+
+from app import create_app, init_index_manager
+from app.utils import get_transcripts
 
 @timeit("FastAPI app init")
 def init_app(data_dir: str):
@@ -116,7 +114,6 @@ if not db_path.exists():
 app = init_app(str(data_root))
 
 # Initialize search service and file records eagerly (before server starts).
-# app.state is a plain Starlette State object; attributes can be set before lifespan.
 init_index_manager(app)
 
 file_records = get_transcripts(json_dir)
@@ -131,26 +128,14 @@ except ImportError:
     pass
 
 # ---------------------------------------------------------------------------
-# 6. Run with uvicorn (dev HTTP or prod HTTPS)
+# 6. Run with uvicorn
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     import uvicorn
 
     host = "0.0.0.0"
-    if args.dev:
-        log.info("DEV mode – http://localhost:5000")
-        uvicorn.run(app, host=host, port=5000, log_level="info")
-    else:
-        if not (Path(args.ssl_cert).exists() and Path(args.ssl_key).exists()):
-            log.error("SSL cert/key not found. Use --dev for HTTP mode or supply valid paths.")
-            sys.exit(1)
-        log.info(f"PROD mode – https://0.0.0.0:{args.port}")
-        uvicorn.run(
-            app,
-            host=host,
-            port=args.port,
-            ssl_certfile=args.ssl_cert,
-            ssl_keyfile=args.ssl_key,
-            log_level="info",
-        )
+    port = 5000 if args.dev else args.port
+
+    log.info(f"{'DEV' if args.dev else 'PROD'} mode – http://{host}:{port}")
+    uvicorn.run(app, host=host, port=port, log_level="info")
