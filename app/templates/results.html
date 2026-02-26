@@ -45,9 +45,9 @@
       </div>
     </div>
     <div class="input-container">
-      <label for="max-results">תוצאות לעמוד:</label>
+      <label for="max-results">פרקים לעמוד:</label>
       <input type="number" name="max_results_per_page" id="max-results"
-             value="{{ max_results_per_page|default(1000) }}" min="1" max="5000">
+             value="{{ max_results_per_page|default(20) }}" min="1" max="5000">
     </div>
   </div>
   <button type="submit">חיפוש</button>
@@ -63,7 +63,9 @@
 {# ―― general stats ―― #}
 <div class="stats">
   {% if pagination.total_results > 0 %}
-    <span>נמצאו {{ pagination.total_results }} תוצאות</span>
+    <span>נמצאו {{ pagination.total_results_display|default(pagination.total_results) }} תוצאות
+    {%- if pagination.docs_on_page is defined %} ב-{{ pagination.docs_on_page }} פרקים{% endif -%}
+    </span>
   {% else %}
     לא נמצאו תוצאות
   {% endif %}

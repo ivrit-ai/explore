@@ -1,21 +1,45 @@
 # app/routes/search.py
 from __future__ import annotations
-from flask import Blueprint, request, jsonify, current_app, abort
 
-from app.services.search import SearchService, SearchHit
-from app.services.index import IndexManager
+from fastapi import APIRouter, Request, Query, HTTPException
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+from typing import List
 
-bp = Blueprint("search", __name__, url_prefix="/search")
+from app.services.search import SearchHit
+
+router = APIRouter()
 
 
-@bp.route("/", methods=["GET"])
-def search():
-    search_svc = current_app.config["SEARCH_SERVICE"]
+class SegmentLookup(BaseModel):
+    episode_idx: int
+    char_offset: int
 
-    q = request.args.get("q", "")
+
+class SegmentLookupRequest(BaseModel):
+    lookups: List[SegmentLookup]
+
+
+class SegmentByIdxLookup(BaseModel):
+    episode_idx: int
+    segment_idx: int
+
+
+class SegmentByIdxRequest(BaseModel):
+    lookups: List[SegmentByIdxLookup]
+
+
+@router.get("/", name="search.search")
+def search(
+    request: Request,
+    q: str = Query(""),
+    regex: bool = Query(False),
+):
+    search_svc = request.app.state.search_service
+
     if not q:
-        abort(400, "missing ?q=")
-    regex = bool(request.args.get("regex"))
+        raise HTTPException(status_code=400, detail="missing ?q=")
+
     hits = search_svc.search(q, regex=regex)
 
     # Enrich hits with segment and episode info
@@ -36,81 +60,65 @@ def search():
             "end_sec": seg.end_sec,
         })
 
-    return jsonify(results)
+    return JSONResponse(results)
 
-@bp.route("/segment", methods=["POST"])
-def get_segment():
-    search_svc = current_app.config["SEARCH_SERVICE"]
-    
-    try:
-        lookups = request.json["lookups"]
-        if not isinstance(lookups, list):
-            abort(400, "lookups must be an array")
-        
-        results = []
-        for lookup in lookups:
-            try:
-                epi = int(lookup["episode_idx"])
-                char = int(lookup["char_offset"])
-                hit = SearchHit(epi, char)
-                seg = search_svc.segment(hit)
-                results.append({
-                    "episode_idx": epi,
-                    "char_offset": char,
-                    "segment_index": seg.seg_idx,
-                    "start_sec": seg.start_sec,
-                    "end_sec": seg.end_sec,
-                    "text": seg.text,
-                })
-            except (KeyError, ValueError) as e:
-                # Skip invalid lookups but continue processing others
-                continue
-        
-        return jsonify(results)
-            
-    except (KeyError, ValueError) as e:
-        abort(400, str(e))
 
-@bp.route("/segment/by_idx", methods=["POST"])
-def get_segments_by_idx():
-    search_svc = current_app.config["SEARCH_SERVICE"]
+@router.post("/segment", name="search.get_segment")
+def get_segment(request: Request, body: SegmentLookupRequest):
+    """Batch char-offset → segment lookup.  Returns a 1:1 aligned array (null for misses)."""
+    search_svc = request.app.state.search_service
+    index = search_svc._index_mgr.get()
+
+    # Single batch query instead of N individual queries
+    pairs = [(l.episode_idx, l.char_offset) for l in body.lookups]
+    segments_map = index.get_segments_at_offsets(pairs)
+
+    results = []
+    for lookup in body.lookups:
+        key = (lookup.episode_idx, lookup.char_offset)
+        seg = segments_map.get(key)
+        if seg:
+            results.append({
+                "episode_idx": lookup.episode_idx,
+                "char_offset": lookup.char_offset,
+                "segment_index": seg["segment_id"],
+                "start_sec": seg["start_time"],
+                "end_sec": seg["end_time"],
+                "text": seg["text"],
+            })
+        else:
+            results.append(None)
+
+    return JSONResponse(results)
+
+
+@router.post("/segment/by_idx", name="search.get_segments_by_idx")
+def get_segments_by_idx(request: Request, body: SegmentByIdxRequest):
+    """Batch (episode_idx, segment_idx) lookup.  Returns a 1:1 aligned array (null for misses)."""
+    search_svc = request.app.state.search_service
     index_mgr = search_svc._index_mgr.get()
-    
-    try:
-        lookups = request.json["lookups"]
-        if not isinstance(lookups, list):
-            abort(400, "lookups must be an array")
-        
-        # Prepare batch lookup
-        batch_lookups = []
-        valid_lookups = []
-        
-        for lookup in lookups:
-            try:
-                epi = int(lookup["episode_idx"])
-                idx = int(lookup["segment_idx"])
-                doc_id = epi
-                batch_lookups.append((doc_id, idx))
-                valid_lookups.append((epi, idx))
-            except (KeyError, ValueError) as e:
-                # Skip invalid lookups but continue processing others
-                continue
-        
-        # Perform batch lookup
-        segments = index_mgr.get_segments_by_ids(batch_lookups)
-        
-        # Map results back to original format
-        results = []
-        for (epi, idx), segment_data in zip(valid_lookups, segments):
+
+    batch_lookups = [(l.episode_idx, l.segment_idx) for l in body.lookups]
+
+    # get_segments_by_ids returns a FLAT list (INNER JOIN: fewer results,
+    # re-ordered by doc_id,segment_id, duplicates collapsed).
+    # Build a dict so we can map back to input order.
+    raw = index_mgr.get_segments_by_ids(batch_lookups)
+    seg_dict = {(s["doc_id"], s["segment_id"]): s for s in raw}
+
+    # Return 1:1 with input, null for missing segments
+    results = []
+    for epi, idx in batch_lookups:
+        seg = seg_dict.get((epi, idx))
+        if seg:
             results.append({
                 "episode_idx": epi,
-                "segment_index": segment_data["segment_id"],
-                "start_sec": segment_data["start_time"],
-                "end_sec": segment_data["end_time"],
-                "text": segment_data["text"]
+                "segment_index": seg["segment_id"],
+                "start_sec": seg["start_time"],
+                "end_sec": seg["end_time"],
+                "text": seg["text"],
             })
-        
-        return jsonify(results)
-            
-    except (KeyError, ValueError) as e:
-        abort(400, str(e))
+        else:
+            results.append(None)
+
+    return JSONResponse(results)

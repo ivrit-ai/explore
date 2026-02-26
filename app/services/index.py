@@ -103,73 +103,62 @@ class TranscriptIndex:
         """
         Get multiple segments by (doc_id, segment_id) pairs.
 
-        Uses a temporary table for optimal performance.
+        Groups by doc_id and uses IN-clause queries to leverage the
+        composite (doc_id, segment_id) index efficiently.
+        Returns a flat list of result dicts (unordered; callers should
+        index by (doc_id, segment_id) key).
         """
         if not lookups:
             return []
 
         logger = logging.getLogger(__name__)
-        logger.debug(f"Fetching segments by IDs: {len(lookups)} lookups")
+        t0 = time.perf_counter()
 
-        # For large batches, use temporary table (more efficient)
-        # Create temp table
-        self._db.execute("""
-            CREATE TEMPORARY TABLE IF NOT EXISTS temp_segment_lookups (
-                doc_id INTEGER,
-                segment_id INTEGER,
-                PRIMARY KEY (doc_id, segment_id)
-            ) WITHOUT ROWID
-        """)
+        # Group segment_ids by doc_id to minimise query count
+        from collections import defaultdict
+        by_doc: dict[int, set[int]] = defaultdict(set)
+        for doc_id, seg_id in lookups:
+            by_doc[doc_id].add(seg_id)
 
-        # Clear any existing data
-        self._db.execute("DELETE FROM temp_segment_lookups")
+        result: list[dict] = []
 
-        # Batch insert lookups (SQLite variable limit)
-        BATCH_SIZE = SQLITE_MAX_PARAMS // 2  # Each lookup pair = 2 parameters
-        for i in range(0, len(lookups), BATCH_SIZE):
-            batch = lookups[i:i + BATCH_SIZE]
-            placeholders = ','.join(['(?, ?)'] * len(batch))
-            params = [val for pair in batch for val in pair]
+        # One query per doc_id; IN-clause hits the (doc_id, segment_id) index
+        # Respect SQLite param limits (reserve 1 for doc_id)
+        max_in = SQLITE_MAX_PARAMS - 1
+        for doc_id, seg_ids in by_doc.items():
+            ids_list = list(seg_ids)
+            for i in range(0, len(ids_list), max_in):
+                batch = ids_list[i:i + max_in]
+                placeholders = ','.join('?' * len(batch))
+                cursor = self._db.execute(
+                    f"SELECT doc_id, segment_id, segment_text, avg_logprob, "
+                    f"char_offset, start_time, end_time "
+                    f"FROM segments "
+                    f"WHERE doc_id = ? AND segment_id IN ({placeholders})",
+                    [doc_id] + batch,
+                )
+                for row in cursor:
+                    result.append({
+                        "doc_id": row[0],
+                        "segment_id": row[1],
+                        "text": row[2],
+                        "avg_logprob": row[3],
+                        "char_offset": row[4],
+                        "start_time": row[5],
+                        "end_time": row[6],
+                    })
 
-            self._db.execute(
-                f"INSERT OR IGNORE INTO temp_segment_lookups VALUES {placeholders}",
-                params
-            )
+        elapsed_ms = (time.perf_counter() - t0) * 1000
+        logger.info(f"Fetched segments by IDs: {len(lookups)} lookups, "
+                    f"{len(result)} results in {elapsed_ms:.1f}ms "
+                    f"({len(by_doc)} docs)")
 
-        # Single join query
-        cursor = self._db.execute("""
-            SELECT s.doc_id, s.segment_id, s.segment_text, s.avg_logprob,
-                   s.char_offset, s.start_time, s.end_time
-            FROM segments s
-            INNER JOIN temp_segment_lookups t
-            ON s.doc_id = t.doc_id AND s.segment_id = t.segment_id
-            ORDER BY s.doc_id, s.segment_id
-        """)
-
-        result = cursor.fetchall()
-
-        # Cleanup
-        self._db.execute("DELETE FROM temp_segment_lookups")
-
-        logger.info(f"Fetched segments by IDs: {len(lookups)} lookups, {len(result)} results")
-
-        return [
-            {
-                "doc_id": row[0],
-                "segment_id": row[1],
-                "text": row[2],
-                "avg_logprob": row[3],
-                "char_offset": row[4],
-                "start_time": row[5],
-                "end_time": row[6]
-            }
-            for row in result
-        ]
+        return result
     
     def get_segment_at_offset(self, doc_id: int, char_offset: int) -> dict:
         """Get the segment that contains the given character offset."""
         logger = logging.getLogger(__name__)
-        logger.info(f"Fetching segment at offset: doc_id={doc_id}, char_offset={char_offset}")
+        logger.debug(f"Fetching segment at offset: doc_id={doc_id}, char_offset={char_offset}")
         
         cursor = self._db.execute("""
             SELECT segment_id, segment_text, avg_logprob, char_offset, start_time, end_time
@@ -183,7 +172,7 @@ class TranscriptIndex:
         if not result:
             raise IndexError(f"No segment found at offset {char_offset} for document {doc_id}")
         
-        logger.info(f"Fetched segment at offset: doc_id={doc_id}, char_offset={char_offset}, segment_id={result[0]}")
+        logger.debug(f"Fetched segment at offset: doc_id={doc_id}, char_offset={char_offset}, segment_id={result[0]}")
         
         return {
             "segment_id": result[0],
@@ -194,11 +183,132 @@ class TranscriptIndex:
             "end_time": result[5]
         }
         
+    def get_segments_at_offsets(self, pairs: list[tuple[int, int]]) -> dict[tuple[int, int], dict]:
+        """Batch lookup segments by (doc_id, char_offset) pairs.
+
+        For each pair, finds the segment where char_offset <= target with max char_offset
+        (the "floor" lookup). Uses the (doc_id, char_offset) composite index for fast
+        individual lookups (~0.025ms each).
+
+        Returns a dict keyed by the input (doc_id, char_offset) pair.
+        """
+        if not pairs:
+            return {}
+
+        result = {}
+        for doc_id, char_offset in pairs:
+            cursor = self._db.execute("""
+                SELECT segment_id, segment_text, avg_logprob, char_offset, start_time, end_time
+                FROM segments
+                WHERE doc_id = ? AND char_offset <= ?
+                ORDER BY char_offset DESC
+                LIMIT 1
+            """, [doc_id, char_offset])
+            row = cursor.fetchone()
+            if row:
+                result[(doc_id, char_offset)] = {
+                    "segment_id": row[0],
+                    "text": row[1],
+                    "avg_logprob": row[2],
+                    "char_offset": row[3],
+                    "start_time": row[4],
+                    "end_time": row[5]
+                }
+
+        return result
+
+    def get_documents_batch(self, doc_ids: list[int]) -> dict[int, dict]:
+        """Batch lookup document info for multiple doc_ids.
+
+        Returns a dict keyed by doc_id.
+        """
+        if not doc_ids:
+            return {}
+
+        unique_ids = list(set(doc_ids))
+        result = {}
+
+        # Batch query with IN clause, respecting param limits
+        for i in range(0, len(unique_ids), SQLITE_MAX_PARAMS):
+            batch = unique_ids[i:i + SQLITE_MAX_PARAMS]
+            placeholders = ','.join('?' * len(batch))
+            cursor = self._db.execute(
+                f"SELECT doc_id, uuid, source, episode, episode_date, episode_title "
+                f"FROM documents WHERE doc_id IN ({placeholders})",
+                batch
+            )
+            for row in cursor:
+                result[row[0]] = {
+                    "doc_id": row[0],
+                    "uuid": row[1],
+                    "source": row[2],
+                    "episode": row[3],
+                    "episode_date": row[4],
+                    "episode_title": row[5]
+                }
+
+        return result
+
+    def get_search_metadata(self, fts_query: str, date_from: Optional[str] = None,
+                           date_to: Optional[str] = None,
+                           sources: Optional[list[str]] = None) -> dict:
+        """Get aggregated metadata (source counts, date range) for an FTS5 query.
+
+        Returns dict with 'sources' (source -> count), 'date_range' (min/max), 'total_docs'.
+        """
+        sql = """
+            SELECT d.source, COUNT(*) as cnt,
+                   MIN(d.episode_date) as min_date,
+                   MAX(d.episode_date) as max_date
+            FROM documents_fts fts
+            JOIN fts_doc_mapping m ON fts.rowid = m.fts_rowid
+            JOIN documents d ON m.doc_id = d.doc_id
+            WHERE documents_fts MATCH ?
+        """
+        params = [fts_query]
+
+        if date_from:
+            sql += " AND d.episode_date >= ?"
+            params.append(date_from)
+        if date_to:
+            sql += " AND d.episode_date <= ?"
+            params.append(date_to)
+        if sources and len(sources) > 0:
+            placeholders = ','.join('?' * len(sources))
+            sql += f" AND d.source IN ({placeholders})"
+            params.extend(sources)
+
+        sql += " GROUP BY d.source"
+
+        cursor = self._db.execute(sql, params)
+
+        sources_dict = {}
+        global_min = None
+        global_max = None
+        total_docs = 0
+
+        for source, cnt, min_date, max_date in cursor:
+            if source:
+                sources_dict[source] = cnt
+            total_docs += cnt
+            if min_date:
+                if global_min is None or min_date < global_min:
+                    global_min = min_date
+            if max_date:
+                if global_max is None or max_date > global_max:
+                    global_max = max_date
+
+        return {
+            "sources": sources_dict,
+            "date_range": {"min": global_min, "max": global_max},
+            "total_docs": total_docs
+        }
+
     def get_source_by_episode_idx(self, episode_idx: int) -> str:
         """Get document source by episode index (0-based)."""
         doc_id = episode_idx
         cursor = self._db.execute(
-            "SELECT source FROM documents WHERE doc_id = ?", 
+            "SELECT source FROM documents WHERE doc_id = ?",
             [doc_id]
         )
         result = cursor.fetchone()
@@ -207,7 +317,8 @@ class TranscriptIndex:
         return result[0]
 
     def search_hits(self, query: str, search_mode: str = 'partial', date_from: Optional[str] = None,
-                   date_to: Optional[str] = None, sources: Optional[list[str]] = None) -> list[tuple[int, int]]:
+                   date_to: Optional[str] = None, sources: Optional[list[str]] = None,
+                   doc_limit: int = 0, doc_offset: int = 0) -> tuple[list[tuple[int, int]], bool]:
         """Search for query and return (episode_idx, char_offset) pairs for hits.
 
         Args:
@@ -216,8 +327,18 @@ class TranscriptIndex:
             date_from: Optional start date filter (YYYY-MM-DD format)
             date_to: Optional end date filter (YYYY-MM-DD format)
             sources: Optional list of sources to filter by
+            doc_limit: Max number of documents to scan (0 = unlimited)
+            doc_offset: Number of documents to skip (for pagination)
+
+        Returns:
+            Tuple of (hits list, has_more boolean)
         """
-        return self._search_fts5(query, search_mode, date_from, date_to, sources)
+        log = logging.getLogger("index")
+        t_start = time.perf_counter()
+        hits, has_more = self._search_fts5(query, search_mode, date_from, date_to, sources, doc_limit, doc_offset)
+        t_total = time.perf_counter() - t_start
+        log.info(f"[BENCH] search_hits total: {t_total*1000:.1f}ms, {len(hits)} hits, has_more={has_more}")
+        return hits, has_more
 
     def _search_sqlite_simple(self, query: str, search_mode: str = 'partial', date_from: Optional[str] = None,
                              date_to: Optional[str] = None, sources: Optional[list[str]] = None) -> list[tuple[int, int]]:
@@ -290,31 +411,64 @@ class TranscriptIndex:
 
     def _search_fts5(self, query: str, search_mode: str = 'partial',
                      date_from: Optional[str] = None, date_to: Optional[str] = None,
-                     sources: Optional[list[str]] = None) -> list[tuple[int, int]]:
+                     sources: Optional[list[str]] = None,
+                     doc_limit: int = 0, doc_offset: int = 0) -> tuple[list[tuple[int, int]], bool]:
         """Search using FTS5 with mode-specific strategies."""
         log = logging.getLogger("index")
-        log.info(f"FTS5 search: query={query}, mode={search_mode}")
+        log.info(f"FTS5 search: query={query}, mode={search_mode}, doc_limit={doc_limit}, doc_offset={doc_offset}")
 
         if search_mode == 'exact':
-            return self._search_fts5_exact(query, date_from, date_to, sources)
+            return self._search_fts5_exact(query, date_from, date_to, sources, doc_limit, doc_offset)
         elif search_mode == 'partial':
-            return self._search_fts5_partial(query, date_from, date_to, sources)
+            return self._search_fts5_partial(query, date_from, date_to, sources, doc_limit, doc_offset)
         elif search_mode == 'regex':
-            return self._search_fts5_regex(query, date_from, date_to, sources)
+            return self._search_fts5_regex(query, date_from, date_to, sources, doc_limit, doc_offset)
         else:
             raise ValueError(f"Unknown search mode: {search_mode}")
 
-    def _search_fts5_exact(self, query: str, date_from, date_to, sources):
+    @staticmethod
+    def _append_filters(sql, params, date_from, date_to, sources):
+        """Append date/source WHERE clauses and LIMIT/OFFSET to SQL."""
+        if date_from:
+            sql += " AND d.episode_date >= ?"
+            params.append(date_from)
+        if date_to:
+            sql += " AND d.episode_date <= ?"
+            params.append(date_to)
+        if sources and len(sources) > 0:
+            placeholders = ','.join('?' * len(sources))
+            sql += f" AND d.source IN ({placeholders})"
+            params.extend(sources)
+        return sql, params
+
+    def _execute_fts_query(self, sql, params, doc_limit, doc_offset):
+        """Add LIMIT/OFFSET for document pagination and execute.
+
+        Fetches doc_limit+1 rows to detect has_more. Returns (cursor_rows, has_more).
+        """
+        if doc_limit:
+            # Fetch one extra to detect if more docs exist
+            sql += " LIMIT ? OFFSET ?"
+            params.extend([doc_limit + 1, doc_offset])
+        elif doc_offset:
+            sql += " LIMIT -1 OFFSET ?"
+            params.append(doc_offset)
+
+        t_fts = time.perf_counter()
+        cursor = self._db.execute(sql, params)
+        t_fts_done = time.perf_counter()
+        return cursor, t_fts, t_fts_done
+
+    def _search_fts5_exact(self, query: str, date_from, date_to, sources,
+                           doc_limit: int = 0, doc_offset: int = 0):
         """Exact word match using FTS5 phrase query."""
         import regex
 
         log = logging.getLogger("index")
 
-        # FTS5 phrase query: "word" matches whole tokens
-        escaped_query = query.replace('"', '""')  # Escape double quotes
+        escaped_query = query.replace('"', '""')
         fts_query = f'"{escaped_query}"'
 
-        # Build query with filters
         sql = """
             SELECT m.doc_id, fts.full_text
             FROM documents_fts fts
@@ -323,46 +477,39 @@ class TranscriptIndex:
             WHERE documents_fts MATCH ?
         """
         params = [fts_query]
+        sql, params = self._append_filters(sql, params, date_from, date_to, sources)
+        cursor, t_fts, t_fts_done = self._execute_fts_query(sql, params, doc_limit, doc_offset)
 
-        # Add date filters
-        if date_from:
-            sql += " AND d.episode_date >= ?"
-            params.append(date_from)
-        if date_to:
-            sql += " AND d.episode_date <= ?"
-            params.append(date_to)
-
-        # Add source filter
-        if sources and len(sources) > 0:
-            placeholders = ','.join('?' * len(sources))
-            sql += f" AND d.source IN ({placeholders})"
-            params.extend(sources)
-
-        cursor = self._db.execute(sql, params)
-        results = cursor.fetchall()
-
-        # Extract character offsets using word boundary regex
         hits = []
+        has_more = False
+        docs_scanned = 0
         pattern = r'\b' + regex.escape(query) + r'\b'
         compiled_pattern = regex.compile(pattern)
 
-        for doc_id, full_text in results:
+        t_scan = time.perf_counter()
+        for doc_id, full_text in cursor:
+            docs_scanned += 1
+            if doc_limit and docs_scanned > doc_limit:
+                has_more = True
+                break
             for match in compiled_pattern.finditer(full_text):
                 hits.append((doc_id, match.start()))
+        t_scan_done = time.perf_counter()
 
-        log.info(f"Exact search completed: {len(hits)} hits from {len(results)} candidates")
-        return hits
+        log.info(f"[BENCH] exact: FTS5={((t_fts_done-t_fts)*1000):.1f}ms, "
+                 f"scan={((t_scan_done-t_scan)*1000):.1f}ms ({docs_scanned} docs), "
+                 f"{len(hits)} hits, has_more={has_more}")
+        return hits, has_more
 
-    def _search_fts5_partial(self, query: str, date_from, date_to, sources):
+    def _search_fts5_partial(self, query: str, date_from, date_to, sources,
+                            doc_limit: int = 0, doc_offset: int = 0):
         """Partial/substring match using FTS5 prefix matching."""
         import regex
 
         log = logging.getLogger("index")
 
-        # FTS5 prefix query for candidate narrowing
         escaped_query = query.replace('"', '""')
         tokens = escaped_query.split()
-        # Use OR to match any token prefix (broader candidates)
         fts_query = ' OR '.join([f'{token}*' for token in tokens])
 
         sql = """
@@ -373,56 +520,41 @@ class TranscriptIndex:
             WHERE documents_fts MATCH ?
         """
         params = [fts_query]
+        sql, params = self._append_filters(sql, params, date_from, date_to, sources)
+        cursor, t_fts, t_fts_done = self._execute_fts_query(sql, params, doc_limit, doc_offset)
 
-        # Add filters (same as exact)
-        if date_from:
-            sql += " AND d.episode_date >= ?"
-            params.append(date_from)
-        if date_to:
-            sql += " AND d.episode_date <= ?"
-            params.append(date_to)
-        if sources and len(sources) > 0:
-            placeholders = ','.join('?' * len(sources))
-            sql += f" AND d.source IN ({placeholders})"
-            params.extend(sources)
-
-        cursor = self._db.execute(sql, params)
-        results = cursor.fetchall()
-
-        # Python substring search on candidates
         hits = []
+        has_more = False
+        docs_scanned = 0
         escaped_pattern = regex.escape(query)
         compiled_pattern = regex.compile(escaped_pattern)
 
-        for doc_id, full_text in results:
+        t_scan = time.perf_counter()
+        for doc_id, full_text in cursor:
+            docs_scanned += 1
+            if doc_limit and docs_scanned > doc_limit:
+                has_more = True
+                break
             for match in compiled_pattern.finditer(full_text):
                 hits.append((doc_id, match.start()))
+        t_scan_done = time.perf_counter()
 
-        log.info(f"Partial search completed: {len(hits)} hits from {len(results)} candidates")
-        return hits
+        log.info(f"[BENCH] partial: FTS5={((t_fts_done-t_fts)*1000):.1f}ms, "
+                 f"scan={((t_scan_done-t_scan)*1000):.1f}ms ({docs_scanned} docs), "
+                 f"{len(hits)} hits, has_more={has_more}")
+        return hits, has_more
 
-    def _search_fts5_regex(self, query: str, date_from, date_to, sources):
+    def _search_fts5_regex(self, query: str, date_from, date_to, sources,
+                          doc_limit: int = 0, doc_offset: int = 0):
         """Regex search with FTS5 candidate narrowing."""
         import regex
 
         log = logging.getLogger("index")
 
-        # Extract potential literal tokens from regex pattern
-        # Look for sequences of 2+ word characters
         potential_tokens = regex.findall(r'\w{2,}', query)
 
         if potential_tokens:
-            # Use first token as FTS5 filter (prefix match)
-            fts_query = f'{potential_tokens[0]}*'
-            use_fts_filter = True
-        else:
-            # No good token - fetch all documents (slow path)
-            fts_query = None
-            use_fts_filter = False
-            log.warning(f"Regex pattern '{query}' has no extractable tokens - full scan")
-
-        # Build query
-        if use_fts_filter:
+            fts_query = ' AND '.join([f'{token}*' for token in potential_tokens[:3]])
             sql = """
                 SELECT m.doc_id, fts.full_text
                 FROM documents_fts fts
@@ -432,6 +564,7 @@ class TranscriptIndex:
             """
             params = [fts_query]
         else:
+            log.warning(f"Regex pattern '{query}' has no extractable tokens - full scan")
             sql = """
                 SELECT d.doc_id, fts.full_text
                 FROM documents_fts fts
@@ -441,34 +574,31 @@ class TranscriptIndex:
             """
             params = []
 
-        # Add filters
-        if date_from:
-            sql += " AND d.episode_date >= ?"
-            params.append(date_from)
-        if date_to:
-            sql += " AND d.episode_date <= ?"
-            params.append(date_to)
-        if sources and len(sources) > 0:
-            placeholders = ','.join('?' * len(sources))
-            sql += f" AND d.source IN ({placeholders})"
-            params.extend(sources)
+        sql, params = self._append_filters(sql, params, date_from, date_to, sources)
+        cursor, t_fts, t_fts_done = self._execute_fts_query(sql, params, doc_limit, doc_offset)
 
-        cursor = self._db.execute(sql, params)
-        results = cursor.fetchall()
-
-        # Apply full regex on candidates
         hits = []
+        has_more = False
+        docs_scanned = 0
+        t_scan = time.perf_counter()
         try:
             compiled_regex = regex.compile(query)
-            for doc_id, full_text in results:
+            for doc_id, full_text in cursor:
+                docs_scanned += 1
+                if doc_limit and docs_scanned > doc_limit:
+                    has_more = True
+                    break
                 for match in compiled_regex.finditer(full_text):
                     hits.append((doc_id, match.start()))
         except regex.error as e:
             log.error(f"Invalid regex pattern: {query}, error: {e}")
-            return []
+            return [], False
+        t_scan_done = time.perf_counter()
 
-        log.info(f"Regex search completed: {len(hits)} hits from {len(results)} candidates")
-        return hits
+        log.info(f"[BENCH] regex: FTS5={((t_fts_done-t_fts)*1000):.1f}ms, "
+                 f"scan={((t_scan_done-t_scan)*1000):.1f}ms ({docs_scanned} docs), "
+                 f"{len(hits)} hits, has_more={has_more}")
+        return hits, has_more
 
 
 def _setup_schema(db: DatabaseService):
@@ -562,6 +692,11 @@ def _setup_schema(db: DatabaseService):
     db.execute("""
         CREATE INDEX IF NOT EXISTS idx_fts_doc_mapping_doc_id
         ON fts_doc_mapping(doc_id)
+    """)
+
+    db.execute("""
+        CREATE INDEX IF NOT EXISTS idx_segments_doc_id_char_offset
+        ON segments(doc_id, char_offset)
     """)
 
 
@@ -693,6 +828,7 @@ class IndexManager:
         db.execute("DROP INDEX IF EXISTS idx_documents_date")
         db.execute("DROP INDEX IF EXISTS idx_documents_source")
         db.execute("DROP INDEX IF EXISTS idx_fts_doc_mapping_doc_id")
+        db.execute("DROP INDEX IF EXISTS idx_segments_doc_id_char_offset")
         # Note: FTS5 manages its own indexes internally
 
         # ----- THREADPOOL FOR JSON PARSING -----
@@ -941,6 +1077,9 @@ class IndexManager:
 
         db.execute("""CREATE INDEX idx_fts_doc_mapping_doc_id
                     ON fts_doc_mapping(doc_id)""")
+
+        db.execute("""CREATE INDEX idx_segments_doc_id_char_offset
+                    ON segments(doc_id, char_offset)""")
 
         # Optimize FTS5 index after bulk insert
         log.info("Optimizing FTS5 index...")

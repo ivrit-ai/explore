@@ -1,7 +1,6 @@
 import os
 from urllib.parse import unquote
 from typing import Optional, List
-from flask import current_app
 from pathlib import Path
 from dataclasses import dataclass
 from typing import NamedTuple
@@ -53,20 +52,19 @@ def get_transcripts(root: Path) -> List[FileRecord]:
     return recs
 
 
-def resolve_audio_path(source: str) -> Optional[str]:
+def resolve_audio_path(source: str, audio_dir) -> Optional[str]:
     """
     Resolve the path to an audio file based on source.
-    
+
     Args:
         source: The source identifier
-        
+        audio_dir: Path to the audio directory
+
     Returns:
         The full path to the audio file if it exists, None otherwise.
         Audio files are expected to be stored as: audio_dir/source/source.opus
         Handles URL decoding if the file doesn't exist initially.
     """
-    # Get audio directory from Flask app config
-    audio_dir = current_app.config.get('AUDIO_DIR')
     if not audio_dir:
         return None
 

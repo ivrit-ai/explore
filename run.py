@@ -21,10 +21,8 @@ import sys
 import time
 from pathlib import Path
 
-from app import create_app
+from app import create_app, init_index_manager
 from app.utils import get_transcripts
-from app.services.index import IndexManager
-from app.services.search import SearchService
 
 # ---------------------------------------------------------------------------
 # 1. CLI parsing
@@ -43,7 +41,7 @@ args = parser.parse_args()
 
 # Set environment variables for dev mode
 if args.dev:
-    os.environ['FLASK_ENV'] = 'development'
+    os.environ['APP_ENV'] = 'development'
     os.environ['TS_USER_EMAIL'] = 'dev@ivrit.ai'
 
 # ---------------------------------------------------------------------------
@@ -53,7 +51,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s",
     handlers=[
-        logging.FileHandler("app.log", encoding="utf‑8"),
+        logging.FileHandler("app.log", encoding="utf-8"),
         logging.StreamHandler(sys.stdout),
     ],
 )
@@ -75,10 +73,10 @@ def timeit(name: str):
     return _decor
 
 # ---------------------------------------------------------------------------
-# 4. Initialise Flask + services
+# 4. Initialise FastAPI + services
 # ---------------------------------------------------------------------------
 
-@timeit("Flask app init")
+@timeit("FastAPI app init")
 def init_app(data_dir: str):
     app = create_app(data_dir=data_dir)
     return app
@@ -108,7 +106,6 @@ db_path = Path(os.environ.get('SQLITE_PATH', 'explore.sqlite'))
 
 if not db_path.exists():
     if args.auto_build:
-        # Auto-build the index
         auto_build_index(data_root)
     else:
         log.error(f"Database not found: {db_path}")
@@ -117,42 +114,43 @@ if not db_path.exists():
         sys.exit(1)
 
 app = init_app(str(data_root))
-with app.app_context():
-    from app import init_index_manager
 
-    # Load index from existing database
-    index_manager = init_index_manager(app)
+# Initialize search service and file records eagerly (before server starts).
+# app.state is a plain Starlette State object; attributes can be set before lifespan.
+init_index_manager(app)
 
-    # Load file records for the app
-    file_records = get_transcripts(json_dir)
-    app.config["FILE_RECORDS"] = file_records
+file_records = get_transcripts(json_dir)
+app.state.file_records = file_records
 
-    # make main blueprint globals match
-    from app.routes import main as main_bp
-    main_bp.file_records = file_records
-    main_bp.search_service = app.config["SEARCH_SERVICE"]
-    
-
-    # memory diagnostics (optional)
-    try:
-        import psutil
-        rss = psutil.Process().memory_info().rss / (1024 ** 2)
-        log.info(f"Resident memory: {rss:.1f} MB")
-    except ImportError:
-        pass
+# Memory diagnostics (optional)
+try:
+    import psutil
+    rss = psutil.Process().memory_info().rss / (1024 ** 2)
+    log.info(f"Resident memory: {rss:.1f} MB")
+except ImportError:
+    pass
 
 # ---------------------------------------------------------------------------
-# 6. Run Flask (dev HTTP or prod HTTPS)
+# 6. Run with uvicorn (dev HTTP or prod HTTPS)
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    import uvicorn
+
     host = "0.0.0.0"
     if args.dev:
         log.info("DEV mode – http://localhost:5000")
-        app.run(host=host, port=5000, debug=False, threaded=True)
+        uvicorn.run(app, host=host, port=5000, log_level="info")
     else:
         if not (Path(args.ssl_cert).exists() and Path(args.ssl_key).exists()):
             log.error("SSL cert/key not found. Use --dev for HTTP mode or supply valid paths.")
             sys.exit(1)
         log.info(f"PROD mode – https://0.0.0.0:{args.port}")
-        app.run(host=host, port=args.port, ssl_context=(args.ssl_cert, args.ssl_key), threaded=True)
+        uvicorn.run(
+            app,
+            host=host,
+            port=args.port,
+            ssl_certfile=args.ssl_cert,
+            ssl_keyfile=args.ssl_key,
+            log_level="info",
+        )

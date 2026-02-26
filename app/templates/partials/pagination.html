@@ -1,8 +1,11 @@
 {# app/templates/partials/pagination.html #}
-{% if pagination.total_pages > 1 %}
+{% if pagination.has_prev or pagination.has_next %}
 <div class="pagination">
   <div class="pagination-info">
-    עמוד {{ pagination.page }} מתוך {{ pagination.total_pages }}
+    עמוד {{ pagination.page }}
+    {% if pagination.docs_on_page is defined %}
+      ({{ pagination.docs_on_page }} פרקים)
+    {% endif %}
   </div>
 
   <div class="pagination-controls">
@@ -17,42 +20,7 @@
       <span class="pagination-btn disabled">← הקודם</span>
     {% endif %}
 
-    {# numbered pages (window of 5) #}
-    {% set start_page = [1, pagination.page - 2] | max %}
-    {% set end_page   = [pagination.total_pages, start_page + 4] | min %}
-    {% set start_page = [1, end_page - 4] | max %}
-
-    {% if start_page > 1 %}
-      <a href="{{ url_for('main.search',
-                          q=query, max_results_per_page=max_results_per_page,
-                          page=1, search_mode=search_mode,
-                          date_from=date_from, date_to=date_to, sources=sources_param) }}"
-         class="pagination-btn">1</a>
-      {% if start_page > 2 %}<span class="pagination-ellipsis">…</span>{% endif %}
-    {% endif %}
-
-    {% for p in range(start_page, end_page + 1) %}
-      {% if p == pagination.page %}
-        <span class="pagination-btn active">{{ p }}</span>
-      {% else %}
-        <a href="{{ url_for('main.search',
-                            q=query, max_results_per_page=max_results_per_page,
-                            page=p, search_mode=search_mode,
-                            date_from=date_from, date_to=date_to, sources=sources_param) }}"
-           class="pagination-btn">{{ p }}</a>
-      {% endif %}
-    {% endfor %}
-
-    {% if end_page < pagination.total_pages %}
-      {% if end_page < pagination.total_pages - 1 %}
-        <span class="pagination-ellipsis">…</span>
-      {% endif %}
-      <a href="{{ url_for('main.search',
-                          q=query, max_results_per_page=max_results_per_page,
-                          page=pagination.total_pages, search_mode=search_mode,
-                          date_from=date_from, date_to=date_to, sources=sources_param) }}"
-         class="pagination-btn">{{ pagination.total_pages }}</a>
-    {% endif %}
+    <span class="pagination-btn active">{{ pagination.page }}</span>
 
     {# next → #}
     {% if pagination.has_next %}

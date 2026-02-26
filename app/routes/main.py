@@ -1,119 +1,101 @@
-from flask import Blueprint, render_template, request, jsonify, current_app
-from ..services.search import SearchService
-from ..services.analytics_service import track_performance
-from ..routes.auth import login_required
+from fastapi import APIRouter, Request, Query, Depends
+from fastapi.responses import JSONResponse
+from ..routes.auth import require_login
+from ..templating import render
 import time
 import os
 import logging
-import uuid
-from ..services.index import IndexManager
 from collections import defaultdict
 
 logger = logging.getLogger(__name__)
 
-bp = Blueprint('main', __name__)
+router = APIRouter()
 
-# Global search service instance for persistence
-search_service = None
-file_records = None
 
-@bp.route('/')
-@login_required
-def home():
-    # Track page view
-    analytics = current_app.config.get('ANALYTICS_SERVICE')
+@router.get('/', name='main.home')
+def home(request: Request, user_email: str = Depends(require_login)):
+    analytics = request.app.state.analytics
     if analytics:
-        analytics.capture_event('page_viewed', {'page': 'home'})
-    return render_template('home.html')
+        analytics.capture_event('page_viewed', {'page': 'home'}, user_email=user_email)
+    return render(request, 'home.html')
 
-@bp.route('/search')
-@login_required
-@track_performance('search_executed', include_args=['query', 'page'])
-def search():
-    query      = request.args.get('q', '').strip()
-    
+
+@router.get('/search', name='main.search')
+def search(
+    request: Request,
+    q: str = Query(''),
+    max_results_per_page: int = Query(20),
+    page: int = Query(1),
+    search_mode: str = Query('exact'),
+    date_from: str = Query(''),
+    date_to: str = Query(''),
+    sources: str = Query(''),
+    user_email: str = Depends(require_login),
+):
+    query = q.strip()
+
     # Block empty queries
     if not query:
         logger.warning("Search attempted with empty query")
-        return render_template('home.html', error="נא להזין מונח לחיפוש"), 400
-    
-    per_page   = int(request.args.get('max_results_per_page', 1000))
-    per_page   = min(per_page, 5000)  # Cap at 5000
-    page       = max(1, int(request.args.get('page', 1)))
+        return render(request, 'home.html', error="נא להזין מונח לחיפוש")
 
-    # Get search mode parameter
-    search_mode = request.args.get('search_mode', 'exact').strip()
+    per_page = min(int(max_results_per_page), 5000)
+    page = max(1, int(page))
+
     # Validate search mode
     if search_mode not in ['exact', 'partial', 'regex']:
         search_mode = 'exact'
 
-    # Get filter parameters from request
-    date_from = request.args.get('date_from', '').strip() or None
-    date_to = request.args.get('date_to', '').strip() or None
-    sources_param = request.args.get('sources', '').strip()
-    sources = [s.strip() for s in sources_param.split(',') if s.strip()] if sources_param else None
-
-    # Validate that query is not empty (after reading all parameters)
-    if not query:
-        return render_template('results.html',
-                             query='',
-                             results=[],
-                             pagination={
-                                 'page': page,
-                                 'per_page': per_page,
-                                 'total_pages': 1,
-                                 'total_results': 0,
-                                 'has_prev': False,
-                                 'has_next': False
-                             },
-                             max_results_per_page=per_page,
-                             search_mode=search_mode,
-                             date_from=date_from,
-                             date_to=date_to,
-                             sources=sources,
-                             sources_param=sources_param,
-                             error_message='אנא הזן מונח לחיפוש')
+    # Process filter parameters
+    date_from_val = date_from.strip() or None
+    date_to_val = date_to.strip() or None
+    sources_param = sources.strip()
+    sources_list = [s.strip() for s in sources_param.split(',') if s.strip()] if sources_param else None
 
     start_time = time.time()
 
-    global search_service, file_records
-    if file_records is None:
-        from ..utils import get_transcripts
-        json_dir = current_app.config.get('DATA_DIR') / "json"
-        file_records = get_transcripts(json_dir)
-    if search_service is None:
-        # Get database type from environment
-        db_type = os.environ.get('DEFAULT_DB_TYPE', 'sqlite')
+    search_service = request.app.state.search_service
 
-        search_service = SearchService(IndexManager(file_records, db_type=db_type))
-
-    # Apply filters to search with search mode
-    hits = search_service.search(query, search_mode=search_mode, date_from=date_from,
-                                date_to=date_to, sources=sources)
+    # Document-based pagination
+    doc_offset = (page - 1) * per_page
+    hits, has_more = search_service.search(
+        query, search_mode=search_mode, date_from=date_from_val,
+        date_to=date_to_val, sources=sources_list,
+        doc_limit=per_page, doc_offset=doc_offset,
+    )
     total = len(hits)
 
-    # simple slicing
-    start_i = (page - 1) * per_page
-    end_i   = start_i + per_page
-    page_hits = hits[start_i:end_i]
+    # Batch enrich hits with segment info + document info
+    t_enrich = time.time()
+    index = search_service._index_mgr.get()
 
-    # enrich hits with segment info (start time + index)
+    # Batch segment lookup
+    offset_pairs = [(h.episode_idx, h.char_offset) for h in hits]
+    segments_map = index.get_segments_at_offsets(offset_pairs)
+
+    # Batch document lookup
+    unique_doc_ids = list(set(h.episode_idx for h in hits))
+    docs_map = index.get_documents_batch(unique_doc_ids)
+
     records = []
-    for h in page_hits:
-        seg = search_service.segment(h)
-        doc_info = search_service._index_mgr.get().get_document_info(h.episode_idx)
+    for h in hits:
+        seg = segments_map.get((h.episode_idx, h.char_offset), {})
+        doc_info = docs_map.get(h.episode_idx, {})
         records.append({
             "episode_idx":  h.episode_idx,
             "char_offset":  h.char_offset,
             "uuid":         doc_info.get("uuid", ""),
-            "episode": doc_info.get("episode", ""),
+            "episode":      doc_info.get("episode", ""),
             "source":       doc_info.get("source", ""),
-            "segment_idx":  seg.seg_idx,
-            "start_sec":    seg.start_sec,
-            "end_sec":      seg.end_sec,
+            "segment_idx":  seg.get("segment_id", 0),
+            "start_sec":    seg.get("start_time", 0),
+            "end_sec":      seg.get("end_time", 0),
             "episode_title": doc_info.get("episode_title", ""),
             "episode_date": doc_info.get("episode_date", ""),
         })
+    t_enrich_done = time.time()
+    logger.info(f"[BENCH] enrichment: {((t_enrich_done-t_enrich)*1000):.1f}ms for {len(hits)} hits "
+                f"({len(unique_doc_ids)} docs, batch)")
 
     # Group results by (source, episode_idx)
     grouped = defaultdict(list)
@@ -136,15 +118,18 @@ def search():
     pagination = {
         "page": page,
         "per_page": per_page,
-        "total_pages": max(1, (total + per_page - 1) // per_page),
         "total_results": total,
+        "total_results_display": f"{total:,}",
+        "docs_on_page": len(unique_doc_ids),
         "has_prev": page > 1,
-        "has_next": end_i < total,
+        "has_next": has_more,
     }
 
     # Track search analytics
     execution_time_ms = (time.time() - start_time) * 1000
-    analytics = current_app.config.get('ANALYTICS_SERVICE')
+    logger.info(f"[BENCH] total request: {execution_time_ms:.1f}ms (query={query}, mode={search_mode}, "
+                f"hits={total}, docs={len(unique_doc_ids)}, has_more={has_more})")
+    analytics = request.app.state.analytics
     if analytics:
         analytics.capture_search(
             query=query,
@@ -152,95 +137,84 @@ def search():
             page=page,
             execution_time_ms=execution_time_ms,
             results_count=len(records),
-            total_results=total
+            total_results=total,
+            user_email=user_email,
         )
 
-    if request.headers.get('Accept') == 'application/json':
-        return jsonify({"results": records, "pagination": pagination})
+    accept = request.headers.get('Accept', '')
+    if accept == 'application/json':
+        return JSONResponse({"results": records, "pagination": pagination})
 
-    return render_template('results.html',
-                           query=query,
-                           results=display_groups,
-                           pagination=pagination,
-                           max_results_per_page=per_page,
-                           search_mode=search_mode,
-                           date_from=date_from,
-                           date_to=date_to,
-                           sources=sources,
-                           sources_param=sources_param)
+    return render(request, 'results.html',
+                  query=query,
+                  results=display_groups,
+                  pagination=pagination,
+                  max_results_per_page=per_page,
+                  search_mode=search_mode,
+                  date_from=date_from_val,
+                  date_to=date_to_val,
+                  sources=sources_list,
+                  sources_param=sources_param)
 
-@bp.route('/search/metadata')
-@login_required
-def search_metadata():
+
+@router.get('/search/metadata', name='main.search_metadata')
+def search_metadata(
+    request: Request,
+    q: str = Query(''),
+    search_mode: str = Query('exact'),
+    date_from: str = Query(''),
+    date_to: str = Query(''),
+    sources: str = Query(''),
+    user_email: str = Depends(require_login),
+):
     """Return metadata (sources and date range) for all search results."""
-    query = request.args.get('q', '').strip()
+    query = q.strip()
 
     if not query:
-        return jsonify({"error": "Missing query parameter 'q'"}), 400
+        return JSONResponse({"error": "Missing query parameter 'q'"}, status_code=400)
 
-    # Get search mode parameter
-    search_mode = request.args.get('search_mode', 'exact').strip()
-    # Validate search mode
     if search_mode not in ['exact', 'partial', 'regex']:
         search_mode = 'exact'
 
-    global search_service, file_records
-    if file_records is None:
-        from ..utils import get_transcripts
-        json_dir = current_app.config.get('DATA_DIR') / "json"
-        file_records = get_transcripts(json_dir)
-    if search_service is None:
-        # Get database type from environment
-        db_type = os.environ.get('DEFAULT_DB_TYPE', 'sqlite')
+    search_service = request.app.state.search_service
 
-        search_service = SearchService(IndexManager(file_records, db_type=db_type))
+    date_from_val = date_from.strip() or None
+    date_to_val = date_to.strip() or None
+    sources_param = sources.strip()
+    sources_list = [s.strip() for s in sources_param.split(',') if s.strip()] if sources_param else None
 
-    # Get ALL hits (not paginated) using the specified search mode
-    hits = search_service.search(query, search_mode=search_mode)
-
-    # Extract metadata from all hits
-    sources = defaultdict(int)  # source -> count
-    dates = []  # list of all dates
-    
+    import regex as re_mod
     index = search_service._index_mgr.get()
-    for h in hits:
-        doc_info = index.get_document_info(h.episode_idx)
-        source = doc_info.get("source", "")
-        episode_date = doc_info.get("episode_date", "")
-        
-        if source:
-            sources[source] += 1
-        
-        if episode_date:
-            try:
-                # Parse date to validate and normalize
-                from datetime import datetime
-                date_obj = datetime.strptime(episode_date, "%Y-%m-%d")
-                dates.append(episode_date)  # Keep as string for JSON
-            except (ValueError, TypeError):
-                # Skip invalid dates
-                pass
-    
-    # Convert sources dict to regular dict for JSON
-    sources_dict = dict(sources)
-    
-    # Find min and max dates
-    date_range = {"min": None, "max": None}
-    if dates:
-        dates_sorted = sorted(dates)  # Sort as strings (YYYY-MM-DD format)
-        date_range["min"] = dates_sorted[0]
-        date_range["max"] = dates_sorted[-1]
-    
-    return jsonify({
-        "sources": sources_dict,
-        "date_range": date_range,
-        "total_results": len(hits)
+
+    if search_mode == 'exact':
+        escaped = query.replace('"', '""')
+        fts_query = f'"{escaped}"'
+    elif search_mode == 'partial':
+        escaped = query.replace('"', '""')
+        tokens = escaped.split()
+        fts_query = ' OR '.join([f'{t}*' for t in tokens])
+    else:  # regex
+        potential_tokens = re_mod.findall(r'\w{2,}', query)
+        if potential_tokens:
+            fts_query = ' AND '.join([f'{t}*' for t in potential_tokens[:3]])
+        else:
+            fts_query = None
+
+    if fts_query:
+        metadata = index.get_search_metadata(fts_query, date_from_val, date_to_val, sources_list)
+    else:
+        metadata = {"sources": {}, "date_range": {"min": None, "max": None}, "total_docs": 0}
+
+    return JSONResponse({
+        "sources": metadata["sources"],
+        "date_range": metadata["date_range"],
+        "total_results": metadata["total_docs"],
     })
 
-@bp.route('/privacy')
-def privacy_policy():
-    # Track page view
-    analytics = current_app.config.get('ANALYTICS_SERVICE')
+
+@router.get('/privacy', name='main.privacy')
+def privacy_policy(request: Request):
+    analytics = request.app.state.analytics
     if analytics:
         analytics.capture_event('page_viewed', {'page': 'privacy_policy'})
-    return render_template('privacy.html') 
+    return render(request, 'privacy.html')
