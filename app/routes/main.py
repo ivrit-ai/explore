@@ -32,7 +32,7 @@ def search(
     date_from: str = Query(''),
     date_to: str = Query(''),
     sources: str = Query(''),
-    shuffle: str = Query(''),
+    shuffle: str = Query('1'),
     seed: str = Query(''),
     user_email: str = Depends(require_login),
 ):

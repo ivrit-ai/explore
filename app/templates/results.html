@@ -51,6 +51,7 @@
     </div>
     <div class="input-container">
       <label class="radio-option">
+        <input type="hidden" name="shuffle" value="0">
         <input type="checkbox" name="shuffle" value="1" {% if shuffle == '1' %}checked{% endif %}
                onchange="document.getElementById('seed-input').value = '';">
         <span>ערבוב</span>

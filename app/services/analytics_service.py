@@ -7,9 +7,9 @@ class AnalyticsService:
     def __init__(self, api_key, host="https://app.posthog.com", disabled=False):
         self.api_key = api_key
         self.host = host
-        self.disabled = disabled
+        self.disabled = disabled or not api_key
 
-        if not disabled:
+        if not self.disabled:
             try:
                 posthog.api_key = api_key
                 posthog.host = host
@@ -17,6 +17,8 @@ class AnalyticsService:
             except Exception as e:
                 logger.error(f"Failed to initialize PostHog: {str(e)}")
                 self.disabled = True
+        else:
+            logger.info("PostHog analytics disabled")
 
     def identify_user(self, user_id, properties=None):
         """Identify a user with optional properties"""
