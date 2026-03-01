@@ -1,0 +1,39 @@
+defaults:
+  duration: 3600          # recording duration in seconds (60 min)
+  raw_dir: data/radio/raw
+  split_dir: data/radio/split
+  opus_bitrate: "48k"
+  opus_channels: 1
+  opus_sample_rate: 16000
+  silence_thresh: -35     # dB threshold for silence detection
+  silence_min_dur: 1.5    # minimum silence duration in seconds
+  min_segment_dur: 300    # minimum segment duration (5 min)
+  fallback_chunk_dur: 1800  # fallback chunk size when no schedule (30 min)
+
+stations:
+  kan_bet:
+    name: "כאן ב'"
+    url: "https://25583.live.streamtheworld.com/KAN_BET.mp3"
+    schedule_scraper: kan
+    schedule_id: "2"
+
+  galgalatz:
+    name: "גלגל\"צ"
+    url: "https://glzwizzlv.bynetcdn.com/glglz_mp3"
+    schedule_scraper: glz
+
+  kan_88:
+    name: "כאן 88"
+    url: "https://29073.live.streamtheworld.com/KAN_88.mp3"
+    schedule_scraper: kan
+    schedule_id: "88"
+
+  reshet_gimmel:
+    name: "רשת גימל"
+    url: "https://27873.live.streamtheworld.com/KAN_GIMMEL.mp3"
+    schedule_scraper: kan
+    schedule_id: "gimmel"
+
+  106fm:
+    name: "106FM"
+    url: "https://1062onair.runi.ac.il/idc123.mp3"
