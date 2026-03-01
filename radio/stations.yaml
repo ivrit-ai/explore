@@ -17,10 +17,17 @@ stations:
     schedule_scraper: kan
     schedule_id: "8"
 
+  galatz:
+    name: "גלי צה\"ל"
+    url: "https://glzwizzlv.bynetcdn.com/glz_mp3"
+    schedule_scraper: glz
+    schedule_id: "1051"
+
   galgalatz:
     name: "גלגל\"צ"
     url: "https://glzwizzlv.bynetcdn.com/glglz_mp3"
     schedule_scraper: glz
+    schedule_id: "1920"
 
   kan_88:
     name: "כאן 88"

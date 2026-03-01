@@ -1,111 +1,126 @@
-"""Schedule scraper for Galei Tzahal (Galgalatz)."""
+"""Schedule scraper for GLZ stations (Galatz, Galgalatz).
+
+Uses playwright to bypass Incapsula protection, then fetches schedule
+data from the Umbraco timetable API embedded in glz.co.il.
+"""
 from __future__ import annotations
 
 import json
 import logging
 import re
-from datetime import date, time, datetime
+from datetime import date, datetime, time
 from typing import Optional
-from urllib.request import urlopen, Request
 
 from .base import BaseScheduleScraper, ProgramSlot
 
 log = logging.getLogger(__name__)
 
-GLZ_SCHEDULE_URL = "https://www.glz.co.il/schedule"
+GLZ_BASE = "https://www.glz.co.il"
+# rootId mapping: Galatz=1051, Galgalatz=1920
+GLZ_TIMETABLE_API = "/umbraco/api/timetable/getTimetable?rootId={root_id}&slideindex=0"
+# Schedule page paths (used to trigger Incapsula solve)
+GLZ_SCHEDULE_PAGES = {
+    "1051": "/גלצ/לוח-שידורים",
+    "1920": "/גלגלצ/לוח-שידורים",
+}
 
 
 class GlzScheduleScraper(BaseScheduleScraper):
-    """Scrape schedule from glz.co.il."""
+    """Scrape schedule from glz.co.il via playwright."""
+
+    def __init__(self, root_id: str = "1920"):
+        self.root_id = root_id
 
     def get_schedule(self, day: date) -> list[ProgramSlot]:
         try:
             return self._fetch(day)
         except Exception:
-            log.exception("Failed to fetch Galgalatz schedule for %s", day)
+            log.exception("Failed to fetch GLZ schedule for %s (root %s)", day, self.root_id)
             return []
 
     def _fetch(self, day: date) -> list[ProgramSlot]:
-        # Galgalatz typically embeds schedule data as JSON in page or has an API
-        day_name = _hebrew_day_name(day.weekday())
-        url = f"{GLZ_SCHEDULE_URL}?day={day_name}"
-        req = Request(url, headers={"User-Agent": "ivrit-explore/1.0"})
-        with urlopen(req, timeout=15) as resp:
-            html = resp.read().decode("utf-8", errors="replace")
+        data = self._fetch_via_playwright()
+        if not data:
+            return []
 
-        # Try to extract JSON data from embedded script tags
-        slots = self._parse_html(html)
+        day_str = day.strftime("%d.%m.%y")
+        timetable = data.get("glzTimeTable", [])
+
+        for day_entry in timetable:
+            if day_entry.get("day") == day_str:
+                return self._parse_day(day_entry)
+
+        # If exact date not found, try today's entry
+        for day_entry in timetable:
+            if day_entry.get("isToday"):
+                return self._parse_day(day_entry)
+
+        log.warning("Day %s not found in GLZ timetable (root %s)", day_str, self.root_id)
+        return []
+
+    def _fetch_via_playwright(self) -> Optional[dict]:
+        """Load schedule page via playwright and intercept the timetable API response."""
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            log.error("playwright is required for GLZ schedule scraping: pip install playwright && python -m playwright install chromium")
+            return None
+
+        schedule_path = GLZ_SCHEDULE_PAGES.get(self.root_id, GLZ_SCHEDULE_PAGES["1920"])
+        url = GLZ_BASE + schedule_path
+        api_fragment = f"getTimetable?rootId={self.root_id}"
+
+        result = {}
+
+        def on_response(response):
+            if api_fragment in response.url:
+                try:
+                    result["data"] = json.loads(response.text())
+                except Exception:
+                    pass
+
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            try:
+                page = browser.new_page()
+                page.on("response", on_response)
+                page.goto(url, timeout=30000, wait_until="domcontentloaded")
+                page.wait_for_timeout(12000)
+            finally:
+                browser.close()
+
+        return result.get("data")
+
+    def _parse_day(self, day_entry: dict) -> list[ProgramSlot]:
+        slots: list[ProgramSlot] = []
+        for prog in day_entry.get("programmes", []):
+            slot = self._parse_programme(prog)
+            if slot:
+                slots.append(slot)
         slots.sort(key=lambda s: s.start)
         return slots
 
-    def _parse_html(self, html: str) -> list[ProgramSlot]:
-        """Extract schedule from HTML — try JSON-LD or embedded data first, fall back to regex."""
-        slots: list[ProgramSlot] = []
-
-        # Look for schedule data in script tags
-        for m in re.finditer(r'<script[^>]*type="application/json"[^>]*>(.*?)</script>', html, re.DOTALL):
-            try:
-                data = json.loads(m.group(1))
-                slots = self._extract_from_json(data)
-                if slots:
-                    return slots
-            except (json.JSONDecodeError, TypeError):
-                continue
-
-        # Fallback: extract time + title patterns from HTML
-        # Pattern: "HH:MM" followed by program name
-        for m in re.finditer(
-            r'(\d{1,2}:\d{2})\s*[-–]?\s*(\d{1,2}:\d{2}).*?class="[^"]*title[^"]*"[^>]*>([^<]+)',
-            html, re.DOTALL
-        ):
-            try:
-                start = datetime.strptime(m.group(1), "%H:%M").time()
-                end = datetime.strptime(m.group(2), "%H:%M").time()
-                title = m.group(3).strip()
-                if title:
-                    slots.append(ProgramSlot(start=start, end=end, title=title))
-            except ValueError:
-                continue
-
-        return slots
-
-    def _extract_from_json(self, data) -> list[ProgramSlot]:
-        """Try to extract schedule slots from parsed JSON structure."""
-        slots: list[ProgramSlot] = []
-        if isinstance(data, dict):
-            # Look for schedule-like arrays in the JSON
-            for key, val in data.items():
-                if isinstance(val, list) and val and isinstance(val[0], dict):
-                    for item in val:
-                        slot = self._item_to_slot(item)
-                        if slot:
-                            slots.append(slot)
-                    if slots:
-                        return slots
-        elif isinstance(data, list):
-            for item in data:
-                if isinstance(item, dict):
-                    slot = self._item_to_slot(item)
-                    if slot:
-                        slots.append(slot)
-        return slots
-
     @staticmethod
-    def _item_to_slot(item: dict) -> Optional[ProgramSlot]:
-        title = item.get("title", item.get("name", "")).strip()
+    def _parse_programme(prog: dict) -> Optional[ProgramSlot]:
+        title = (prog.get("topText") or "").strip()
         if not title:
             return None
-        start_str = item.get("start_time", item.get("startTime", item.get("from", "")))
-        end_str = item.get("end_time", item.get("endTime", item.get("to", "")))
-        try:
-            start = datetime.strptime(str(start_str)[:5], "%H:%M").time()
-            end = datetime.strptime(str(end_str)[:5], "%H:%M").time()
-            return ProgramSlot(start=start, end=end, title=title)
-        except (ValueError, TypeError):
+
+        start = _parse_local_time(prog.get("start", ""))
+        end = _parse_local_time(prog.get("end", ""))
+        if start is None or end is None:
             return None
 
+        description = prog.get("description")
+        return ProgramSlot(start=start, end=end, title=title, description=description)
 
-def _hebrew_day_name(weekday: int) -> str:
-    """Convert Python weekday (0=Mon) to Hebrew day name for URL."""
-    names = ["שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת", "ראשון"]
-    return names[weekday]
+
+def _parse_local_time(s: str) -> Optional[time]:
+    """Parse local datetime string like '2026-03-01T05:00:00' to time."""
+    if not s:
+        return None
+    try:
+        dt = datetime.strptime(s[:19], "%Y-%m-%dT%H:%M:%S")
+        return dt.time()
+    except ValueError:
+        return None

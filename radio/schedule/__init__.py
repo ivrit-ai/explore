@@ -17,7 +17,7 @@ def get_scraper(name: Optional[str], **kwargs) -> Optional[BaseScheduleScraper]:
 
     if name == "glz":
         from .glz import GlzScheduleScraper
-        return GlzScheduleScraper()
+        return GlzScheduleScraper(root_id=kwargs.get("schedule_id", "1920"))
 
     return None
 
