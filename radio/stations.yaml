@@ -15,7 +15,7 @@ stations:
     name: "כאן ב'"
     url: "https://25583.live.streamtheworld.com/KAN_BET.mp3"
     schedule_scraper: kan
-    schedule_id: "2"
+    schedule_id: "8"
 
   galgalatz:
     name: "גלגל\"צ"
@@ -26,13 +26,25 @@ stations:
     name: "כאן 88"
     url: "https://29073.live.streamtheworld.com/KAN_88.mp3"
     schedule_scraper: kan
-    schedule_id: "88"
+    schedule_id: "4"
 
   reshet_gimmel:
     name: "רשת גימל"
     url: "https://27873.live.streamtheworld.com/KAN_GIMMEL.mp3"
     schedule_scraper: kan
-    schedule_id: "gimmel"
+    schedule_id: "9"
+
+  kan_tarbut:
+    name: "כאן תרבות"
+    url: "https://25603.live.streamtheworld.com/KAN_TARBUT.mp3"
+    schedule_scraper: kan
+    schedule_id: "7"
+
+  kan_moreshet:
+    name: "כאן מורשת"
+    url: "https://25583.live.streamtheworld.com/KAN_MORESHET.mp3"
+    schedule_scraper: kan
+    schedule_id: "11"
 
   106fm:
     name: "106FM"

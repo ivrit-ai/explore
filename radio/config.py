@@ -46,7 +46,7 @@ def load_config(path: Optional[str | Path] = None) -> RadioConfig:
         path = Path(__file__).parent / "stations.yaml"
 
     path = Path(path)
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         raw = yaml.safe_load(f)
 
     defaults = raw.get("defaults", {})

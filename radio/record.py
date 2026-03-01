@@ -116,7 +116,7 @@ def record_station(
             # Save metadata sidecar
             meta = _collect_metadata(station, config, out_path, duration, start_time)
             meta_path = out_path.with_suffix(".json")
-            meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2))
+            meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
             log.info("Saved metadata: %s", meta_path.name)
             return out_path
         else:

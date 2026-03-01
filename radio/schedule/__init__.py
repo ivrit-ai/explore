@@ -13,7 +13,7 @@ def get_scraper(name: Optional[str], **kwargs) -> Optional[BaseScheduleScraper]:
 
     if name == "kan":
         from .kan import KanScheduleScraper
-        return KanScheduleScraper(channel_id=kwargs.get("schedule_id", "2"))
+        return KanScheduleScraper(channel_id=kwargs.get("schedule_id", "8"))
 
     if name == "glz":
         from .glz import GlzScheduleScraper

@@ -1,23 +1,30 @@
-"""Schedule scraper for Kan stations (Kan Bet, 88FM, Reshet Gimmel)."""
+"""Schedule scraper for Kan stations (Kan Bet, 88FM, Reshet Gimmel).
+
+Scrapes the embedded liveSchedule data from kan.org.il/radio/ page.
+"""
 from __future__ import annotations
 
+import json
 import logging
-from datetime import date, time, datetime
+import re
+from datetime import date, datetime, time, timezone
 from typing import Optional
 from urllib.request import urlopen, Request
-import json
+from zoneinfo import ZoneInfo
+
+IL_TZ = ZoneInfo("Asia/Jerusalem")
 
 from .base import BaseScheduleScraper, ProgramSlot
 
 log = logging.getLogger(__name__)
 
-KAN_SCHEDULE_API = "https://www.kan.org.il/api/live/schedule"
+KAN_RADIO_URL = "https://www.kan.org.il/radio/"
 
 
 class KanScheduleScraper(BaseScheduleScraper):
-    """Scrape schedule from kan.org.il API."""
+    """Scrape schedule from kan.org.il radio page."""
 
-    def __init__(self, channel_id: str = "2"):
+    def __init__(self, channel_id: str = "8"):
         self.channel_id = channel_id
 
     def get_schedule(self, day: date) -> list[ProgramSlot]:
@@ -28,60 +35,67 @@ class KanScheduleScraper(BaseScheduleScraper):
             return []
 
     def _fetch(self, day: date) -> list[ProgramSlot]:
-        url = f"{KAN_SCHEDULE_API}?date={day.isoformat()}&channel={self.channel_id}"
-        req = Request(url, headers={"User-Agent": "ivrit-explore/1.0"})
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "text/html, */*",
+        }
+        req = Request(KAN_RADIO_URL, headers=headers)
         with urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read())
+            html = resp.read().decode("utf-8", errors="replace")
 
-        slots: list[ProgramSlot] = []
-        for item in data if isinstance(data, list) else data.get("items", data.get("schedule", [])):
-            slot = self._parse_item(item)
-            if slot:
-                slots.append(slot)
+        # Extract liveSchedule.push({...}) blocks from inline scripts
+        target_id = str(self.channel_id)
+        for m in re.finditer(r"liveSchedule\.push\((\{.*?\})\);", html, re.DOTALL):
+            try:
+                data = json.loads(m.group(1))
+            except json.JSONDecodeError:
+                continue
+            if str(data.get("ChannelId")) != target_id:
+                continue
 
-        slots.sort(key=lambda s: s.start)
-        return slots
+            slots: list[ProgramSlot] = []
+            for item in data.get("SchedulelItems", []):
+                slot = self._parse_item(item, day)
+                if slot:
+                    slots.append(slot)
+            slots.sort(key=lambda s: s.start)
+            return slots
+
+        log.warning("Channel %s not found in Kan radio page", self.channel_id)
+        return []
 
     @staticmethod
-    def _parse_item(item: dict) -> Optional[ProgramSlot]:
-        try:
-            title = item.get("title", item.get("name", "")).strip()
-            if not title:
-                return None
-
-            start_str = item.get("start_time", item.get("startTime", ""))
-            end_str = item.get("end_time", item.get("endTime", ""))
-
-            # Handle both "HH:MM" and ISO datetime formats
-            start = _parse_time(start_str)
-            end = _parse_time(end_str)
-            if start is None or end is None:
-                return None
-
-            return ProgramSlot(
-                start=start,
-                end=end,
-                title=title,
-                description=item.get("description"),
-            )
-        except (KeyError, ValueError):
+    def _parse_item(item: dict, day: date) -> Optional[ProgramSlot]:
+        title = (item.get("EpisodeName") or item.get("ProgramName") or "").strip()
+        if not title:
             return None
+
+        start_str = item.get("StartingTime", "")
+        end_str = item.get("EndingTime", "")
+        start = _parse_time(start_str)
+        end = _parse_time(end_str)
+        if start is None or end is None:
+            return None
+
+        return ProgramSlot(
+            start=start,
+            end=end,
+            title=title,
+            description=item.get("Description"),
+        )
 
 
 def _parse_time(s: str) -> Optional[time]:
-    """Parse time from HH:MM or ISO datetime string."""
+    """Parse UTC ISO datetime string and convert to Israel local time."""
     if not s:
         return None
-    # Try ISO datetime first
-    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M"):
+    # Strip timezone suffix for parsing as UTC
+    s = s.replace("Z", "").split("+")[0]
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M"):
         try:
-            return datetime.strptime(s.split("+")[0].split("Z")[0], fmt).time()
-        except ValueError:
-            continue
-    # Try plain time
-    for fmt in ("%H:%M:%S", "%H:%M"):
-        try:
-            return datetime.strptime(s, fmt).time()
+            utc_dt = datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
+            local_dt = utc_dt.astimezone(IL_TZ)
+            return local_dt.time()
         except ValueError:
             continue
     return None
