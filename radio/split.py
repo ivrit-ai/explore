@@ -1,10 +1,16 @@
-"""Split raw radio recordings into per-program segments."""
+"""Split raw radio recordings into per-program segments.
+
+Each raw MP3 chunk is processed independently — no cross-file merging.
+Programs are split based on schedule boundaries snapped to silence points.
+A JSON metadata sidecar is written next to each opus file.
+"""
 from __future__ import annotations
 
+import json
 import logging
 import re
 import subprocess
-from datetime import date, datetime, time, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -63,8 +69,7 @@ def _nearest_silence(target: float, silences: list[tuple[float, float]], toleran
 
 def _recording_start_time(raw_path: Path) -> datetime:
     """Extract recording start datetime from filename (YYYY-MM-DD_HHMMSS.mp3)."""
-    stem = raw_path.stem  # e.g. "2026-02-27_140000"
-    return datetime.strptime(stem, "%Y-%m-%d_%H%M%S")
+    return datetime.strptime(raw_path.stem, "%Y-%m-%d_%H%M%S")
 
 
 def _schedule_to_boundaries(
@@ -74,7 +79,6 @@ def _schedule_to_boundaries(
 ) -> list[tuple[float, float, str]]:
     """Convert schedule slots to (offset_start, offset_end, title) relative to recording start."""
     rec_start_secs = rec_start.hour * 3600 + rec_start.minute * 60 + rec_start.second
-    rec_end_secs = rec_start_secs + duration
     segments: list[tuple[float, float, str]] = []
 
     for slot in schedule:
@@ -126,7 +130,7 @@ def split_recording(
     station: StationConfig,
     config: RadioConfig,
 ) -> list[Path]:
-    """Split a raw recording into per-program opus files.
+    """Split a single raw recording into per-program opus files.
 
     Returns list of output paths.
     """
@@ -198,6 +202,18 @@ def split_recording(
         try:
             subprocess.run(cmd, check=True, timeout=300)
             outputs.append(out_path)
+            # Write metadata sidecar
+            meta = {
+                "station_key": station.key,
+                "station_name": station.name,
+                "title": title,
+                "date": rec_date.isoformat(),
+                "start_time": seg_time.strftime("%H:%M"),
+                "duration": round(end - start, 1),
+                "source_file": raw_path.name,
+            }
+            meta_path = out_path.with_suffix(".json")
+            meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
             log.info("Created segment: %s (%.0fs)", out_path.name, end - start)
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
             log.error("Failed to create segment: %s", out_path.name)

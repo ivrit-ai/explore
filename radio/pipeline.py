@@ -1,7 +1,7 @@
 """CLI orchestrator for the radio scraping pipeline.
 
 Usage:
-    python -m radio.pipeline record [--station X] [--duration N]
+    python -m radio.pipeline record [--station X]
     python -m radio.pipeline split [--station X]
     python -m radio.pipeline ingest --data-dir DIR
     python -m radio.pipeline run [--station X] --data-dir DIR
@@ -24,9 +24,10 @@ log = logging.getLogger(__name__)
 def cmd_record(args, config):
     stations = _resolve_stations(args.station, config)
     for station in stations:
-        result = record_station(station, config, duration=args.duration)
-        if result:
-            print(f"Recorded: {result}")
+        chunks = record_station(station, config)
+        if chunks:
+            for c in chunks:
+                print(f"Recorded: {c}")
         else:
             print(f"Recording failed: {station.key}", file=sys.stderr)
 
@@ -38,14 +39,17 @@ def cmd_split(args, config):
         if not raw_dir.exists():
             log.warning("No raw directory for %s", station.key)
             continue
+        # Only process finalized chunks (skip .partial files still being recorded)
         for raw_file in sorted(raw_dir.glob("*.mp3")):
             outputs = split_recording(raw_file, station, config)
             for out in outputs:
                 print(f"Split: {out}")
-            # Remove raw file after successful split
             if outputs:
                 raw_file.unlink()
-                log.info("Removed raw file: %s", raw_file)
+                meta = raw_file.with_suffix(".json")
+                if meta.exists():
+                    meta.unlink()
+                log.info("Removed raw file: %s", raw_file.name)
 
 
 def cmd_ingest(args, config):
@@ -83,12 +87,11 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
 
     # record
-    p_rec = sub.add_parser("record", help="Record radio streams")
+    p_rec = sub.add_parser("record", help="Record radio streams (continuous, 1h chunks)")
     p_rec.add_argument("--station", help="Station key (default: all stations)")
-    p_rec.add_argument("--duration", type=int, help="Recording duration in seconds")
 
     # split
-    p_split = sub.add_parser("split", help="Split raw recordings into segments")
+    p_split = sub.add_parser("split", help="Split raw recordings into program segments")
     p_split.add_argument("--station", help="Station key (default: all stations)")
 
     # ingest
@@ -98,7 +101,6 @@ def main():
     # run (record + split)
     p_run = sub.add_parser("run", help="Record + split (full pipeline)")
     p_run.add_argument("--station", help="Station key (default: all stations)")
-    p_run.add_argument("--duration", type=int, help="Recording duration in seconds")
     p_run.add_argument("--data-dir", help="Explore data directory (for ingest)")
 
     args = parser.parse_args()

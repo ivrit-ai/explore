@@ -1,92 +1,80 @@
-"""Record live radio streams using ffmpeg."""
+"""Record live radio streams continuously using ffmpeg segment muxer.
+
+Produces 1-hour MP3 chunks aligned to clock hours (8:00, 9:00, …).
+When ffmpeg closes a completed chunk and moves to the next hour, the
+completed chunk is split into per-program segments in a background thread.
+"""
 from __future__ import annotations
 
-import json
 import logging
+import signal
 import subprocess
-from datetime import datetime
+import threading
 from pathlib import Path
-from typing import Optional
 
 from .config import RadioConfig, StationConfig
-from .schedule import get_scraper
 
 log = logging.getLogger(__name__)
 
 MIN_FILE_SIZE = 100 * 1024  # 100 KB — discard tiny/empty files
+CHUNK_DURATION = 3600       # 1 hour per chunk
 
 
-def _collect_metadata(
-    station: StationConfig,
-    config: RadioConfig,
-    out_path: Path,
-    duration: int,
-    start_time: datetime,
-) -> dict:
-    """Collect recording metadata: station info, timestamps, schedule, stream info."""
-    meta: dict = {
-        "station_key": station.key,
-        "station_name": station.name,
-        "stream_url": station.url,
-        "start_time": start_time.isoformat(),
-        "requested_duration": duration,
-    }
+def _split_chunk(mp3_path: Path, station: StationConfig, config: RadioConfig):
+    """Split a completed MP3 chunk into program segments (runs in background thread)."""
+    from .split import split_recording
 
-    # Probe actual duration and stream info from the recorded file
-    if out_path.exists():
-        meta["file_size"] = out_path.stat().st_size
-        try:
-            probe = subprocess.run(
-                ["ffprobe", "-v", "quiet", "-print_format", "json",
-                 "-show_format", "-show_streams", str(out_path)],
-                capture_output=True, text=True, timeout=15,
-            )
-            info = json.loads(probe.stdout)
-            fmt = info.get("format", {})
-            meta["actual_duration"] = float(fmt.get("duration", 0))
-            meta["format_name"] = fmt.get("format_name")
-            meta["bitrate"] = int(fmt.get("bit_rate", 0))
-            # Icecast metadata (title, genre, etc.) ends up in format tags
-            tags = fmt.get("tags", {})
-            if tags:
-                meta["stream_tags"] = tags
-        except Exception:
-            pass
+    try:
+        outputs = split_recording(mp3_path, station, config)
+        if outputs:
+            log.info("Split into %d segments, removing raw chunk %s", len(outputs), mp3_path.name)
+            mp3_path.unlink()
+        else:
+            log.warning("Split produced no output for %s — keeping raw chunk", mp3_path.name)
+    except Exception:
+        log.exception("Split failed for %s — keeping raw chunk", mp3_path.name)
 
-    # Fetch schedule for the recording window
-    scraper = get_scraper(station.schedule_scraper, schedule_id=station.schedule_id or "")
-    if scraper:
-        try:
-            schedule = scraper.get_schedule(start_time.date())
-            if schedule:
-                meta["schedule"] = [
-                    {"start": s.start.isoformat(), "end": s.end.isoformat(),
-                     "title": s.title}
-                    for s in schedule
-                ]
-        except Exception:
-            log.debug("Failed to fetch schedule for metadata", exc_info=True)
 
-    return meta
+def _process_completed_chunk(mp3_path: Path, station: StationConfig, config: RadioConfig, split_threads: list[threading.Thread]):
+    """Dispatch split of a completed chunk to a background thread."""
+    size = mp3_path.stat().st_size
+    if size < MIN_FILE_SIZE:
+        log.warning("Discarding tiny chunk %s (%d bytes)", mp3_path.name, size)
+        mp3_path.unlink()
+        return
+    log.info("Completed chunk: %s (%d KB) — dispatching split", mp3_path.name, size // 1024)
+    t = threading.Thread(target=_split_chunk, args=(mp3_path, station, config), daemon=True)
+    t.start()
+    split_threads.append(t)
+
+
+def _segment_list_reader(proc: subprocess.Popen, station: StationConfig, config: RadioConfig, out_dir: Path, split_threads: list[threading.Thread]):
+    """Read completed segment filenames from ffmpeg stdout and dispatch splitting."""
+    for line in proc.stdout:
+        name = line.strip()
+        if not name:
+            continue
+        mp3_path = out_dir / name
+        if mp3_path.exists():
+            _process_completed_chunk(mp3_path, station, config, split_threads)
 
 
 def record_station(
     station: StationConfig,
     config: RadioConfig,
-    duration: Optional[int] = None,
-) -> Optional[Path]:
-    """Record a radio station stream for the given duration.
+) -> list[Path]:
+    """Record a station continuously, producing hour-aligned MP3 chunks.
 
-    Saves a metadata JSON sidecar alongside the MP3.
-    Returns the path to the recorded MP3 file, or None on failure.
+    Each completed hourly chunk is automatically split into per-program
+    segments in a background thread while recording continues.
+    Runs until interrupted (Ctrl-C).
+
+    Returns list of remaining raw chunk paths (if any).
     """
-    duration = duration or config.duration
     out_dir = config.raw_dir / station.key
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    start_time = datetime.now()
-    timestamp = start_time.strftime("%Y-%m-%d_%H%M%S")
-    out_path = out_dir / f"{timestamp}.mp3"
+    pattern = str(out_dir / "%Y-%m-%d_%H%M%S.mp3")
 
     cmd = [
         "ffmpeg", "-y",
@@ -94,33 +82,47 @@ def record_station(
         "-reconnect_streamed", "1",
         "-reconnect_delay_max", "30",
         "-i", station.url,
-        "-t", str(duration),
         "-acodec", "copy",
+        "-f", "segment",
+        "-segment_time", str(CHUNK_DURATION),
+        "-segment_atclocktime", "1",
+        "-strftime", "1",
+        "-segment_list", "pipe:1",
+        "-reset_timestamps", "1",
         "-v", "warning",
-        str(out_path),
+        pattern,
     ]
 
-    log.info("Recording %s for %ds → %s", station.key, duration, out_path)
+    log.info(
+        "Recording %s continuously (1h chunks, hour-aligned, until stopped) → %s",
+        station.key, out_dir,
+    )
+
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True)
+    split_threads: list[threading.Thread] = []
+
+    reader = threading.Thread(
+        target=_segment_list_reader, args=(proc, station, config, out_dir, split_threads), daemon=True,
+    )
+    reader.start()
+
     try:
-        subprocess.run(cmd, check=True, timeout=duration + 120)
-    except subprocess.TimeoutExpired:
-        log.warning("ffmpeg timed out for %s — keeping partial file", station.key)
-    except subprocess.CalledProcessError as exc:
-        log.error("ffmpeg failed for %s (rc=%d)", station.key, exc.returncode)
+        proc.wait()
+    except KeyboardInterrupt:
+        log.info("Stopping recording for %s (interrupted)", station.key)
+        proc.send_signal(signal.SIGINT)
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
 
-    # Keep partial recordings if they're large enough
-    if out_path.exists():
-        size = out_path.stat().st_size
-        if size >= MIN_FILE_SIZE:
-            log.info("Recorded %s (%d KB)", out_path.name, size // 1024)
-            # Save metadata sidecar
-            meta = _collect_metadata(station, config, out_path, duration, start_time)
-            meta_path = out_path.with_suffix(".json")
-            meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-            log.info("Saved metadata: %s", meta_path.name)
-            return out_path
-        else:
-            log.warning("Discarding tiny file %s (%d bytes)", out_path, size)
-            out_path.unlink()
+    reader.join(timeout=5)
 
-    return None
+    # Wait for all in-flight split threads to finish before returning
+    for t in split_threads:
+        t.join()
+
+    chunks = sorted(out_dir.glob("*.mp3"))
+    log.info("Recording session finished: %d remaining chunks for %s", len(chunks), station.key)
+    return list(chunks)
