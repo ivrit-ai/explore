@@ -3,6 +3,7 @@ CLI for managing the search index.
 
 Usage:
     python -m app.cli build --data-dir ../data
+    python -m app.cli add --data-dir ../new_data
     python -m app.cli status
 """
 
@@ -71,6 +72,52 @@ def build_index(data_dir: str):
     return index_mgr
 
 
+def add_index(data_dir: str):
+    """Add new documents to an existing index."""
+    from .utils import get_transcripts
+    from .services.index import IndexManager
+
+    data_root = Path(data_dir).expanduser().resolve()
+    json_dir = data_root / "json"
+
+    if not json_dir.is_dir():
+        log.error(f"Transcript directory not found: {json_dir}")
+        sys.exit(1)
+
+    db_path = Path(os.environ.get('SQLITE_PATH', 'explore.sqlite'))
+
+    if not db_path.exists():
+        log.error(f"Database not found: {db_path}")
+        log.error("Run 'python -m app.cli build --data-dir <path>' first to create the index")
+        sys.exit(1)
+
+    # Scan transcript files
+    log.info(f"Scanning for transcripts in {json_dir}")
+    start_time = time.perf_counter()
+    file_records = get_transcripts(json_dir)
+    scan_duration = time.perf_counter() - start_time
+    log.info(f"Found {len(file_records)} transcript files in {scan_duration:.2f}s")
+
+    if not file_records:
+        log.error("No transcript files found")
+        sys.exit(1)
+
+    # Load existing index and add new documents
+    log.info(f"Loading existing index from {db_path}")
+    index_mgr = IndexManager(index_path=db_path)
+
+    start_time = time.perf_counter()
+    added, skipped = index_mgr.add_documents(file_records)
+    duration = time.perf_counter() - start_time
+
+    log.info(f"Done in {duration:.2f}s: added {added}, skipped {skipped}")
+
+    # Show updated stats
+    index = index_mgr.get()
+    doc_count, total_chars = index.get_document_stats()
+    log.info(f"Index stats: {doc_count} documents, {total_chars:,} total characters")
+
+
 def show_status():
     """Show status and statistics of the current index."""
     from .services.index import IndexManager
@@ -111,6 +158,7 @@ def main():
         epilog="""
 Examples:
   python -m app.cli build --data-dir ../data
+  python -m app.cli add --data-dir ../new_data
   python -m app.cli status
         """
     )
@@ -121,6 +169,11 @@ Examples:
     build_parser = subparsers.add_parser('build', help='Build the search index')
     build_parser.add_argument('--data-dir', required=True,
                              help='Path to data directory containing json/ subdirectory')
+
+    # Add command
+    add_parser = subparsers.add_parser('add', help='Add new documents to an existing index')
+    add_parser.add_argument('--data-dir', required=True,
+                            help='Path to data directory containing json/ subdirectory')
 
     # Status command
     status_parser = subparsers.add_parser('status', help='Show index status and statistics')
@@ -134,6 +187,8 @@ Examples:
     try:
         if args.command == 'build':
             build_index(args.data_dir)
+        elif args.command == 'add':
+            add_index(args.data_dir)
         elif args.command == 'status':
             show_status()
         else:

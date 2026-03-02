@@ -9,12 +9,16 @@ segments in a background thread.
 from __future__ import annotations
 
 import logging
+import os
 import signal
 import subprocess
 import threading
 from pathlib import Path
 
 from .config import RadioConfig, StationConfig
+
+# All timestamps (filenames, schedules) use Israel time
+_IL_ENV = {**os.environ, "TZ": "Asia/Jerusalem"}
 
 log = logging.getLogger(__name__)
 
@@ -103,7 +107,7 @@ def record_station(
         station.key, out_dir,
     )
 
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True)
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True, env=_IL_ENV)
     split_threads: list[threading.Thread] = []
 
     reader = threading.Thread(

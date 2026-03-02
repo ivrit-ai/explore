@@ -1,8 +1,12 @@
 """Split raw radio recordings into per-program segments.
 
-Each raw MP3 chunk is processed independently — no cross-file merging.
+Each raw chunk is processed independently — no cross-file merging.
 Programs are split based on schedule boundaries snapped to silence points.
 A JSON metadata sidecar is written next to each opus file.
+
+Filenames are in Israel local time (recording writes them with TZ=Asia/Jerusalem).
+Schedule times from scrapers are also in Israel local time, so the comparison
+in _schedule_to_boundaries is timezone-consistent.
 """
 from __future__ import annotations
 
@@ -68,7 +72,11 @@ def _nearest_silence(target: float, silences: list[tuple[float, float]], toleran
 
 
 def _recording_start_time(raw_path: Path) -> datetime:
-    """Extract recording start datetime from filename (YYYY-MM-DD_HHMMSS.opus)."""
+    """Extract recording start datetime from filename (YYYY-MM-DD_HHMMSS.opus).
+
+    The filename is in Israel local time (set by TZ=Asia/Jerusalem in the
+    recorder's ffmpeg env).  Returned as a naive datetime in Israel time.
+    """
     return datetime.strptime(raw_path.stem, "%Y-%m-%d_%H%M%S")
 
 
