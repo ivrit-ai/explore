@@ -68,7 +68,7 @@ def _nearest_silence(target: float, silences: list[tuple[float, float]], toleran
 
 
 def _recording_start_time(raw_path: Path) -> datetime:
-    """Extract recording start datetime from filename (YYYY-MM-DD_HHMMSS.mp3)."""
+    """Extract recording start datetime from filename (YYYY-MM-DD_HHMMSS.opus)."""
     return datetime.strptime(raw_path.stem, "%Y-%m-%d_%H%M%S")
 
 
@@ -191,10 +191,7 @@ def split_recording(
             "-i", str(raw_path),
             "-ss", f"{start:.2f}",
             "-to", f"{end:.2f}",
-            "-acodec", "libopus",
-            "-b:a", config.opus_bitrate,
-            "-ac", str(config.opus_channels),
-            "-ar", str(config.opus_sample_rate),
+            "-acodec", "copy",
             "-v", "warning",
             str(out_path),
         ]

@@ -29,12 +29,6 @@ stations:
     schedule_scraper: glz
     schedule_id: "1920"
 
-  kan_88:
-    name: "כאן 88"
-    url: "https://29073.live.streamtheworld.com/KAN_88.mp3"
-    schedule_scraper: kan
-    schedule_id: "4"
-
   reshet_gimmel:
     name: "רשת גימל"
     url: "https://27873.live.streamtheworld.com/KAN_GIMMEL.mp3"
