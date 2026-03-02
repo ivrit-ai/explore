@@ -53,6 +53,11 @@ stations:
     schedule_scraper: kan
     schedule_id: "11"
 
+  eco99fm:
+    name: "אקו 99FM"
+    url: "https://eco01.mediacast.co.il/ecolive/99fm/icecast.audio"
+    schedule_scraper: eco99fm
+
   106fm:
     name: "106FM"
     url: "https://1062onair.runi.ac.il/idc123.mp3"
