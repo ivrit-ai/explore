@@ -58,6 +58,12 @@ stations:
     url: "https://eco01.mediacast.co.il/ecolive/99fm/icecast.audio"
     schedule_scraper: eco99fm
 
+  kolhai:
+    name: "קול חי"
+    url: "https://live.kcm.fm/live-new"
+    schedule_scraper: kolhai
+    schedule_id: "2"
+
   106fm:
     name: "106FM"
     url: "https://1062onair.runi.ac.il/idc123.mp3"

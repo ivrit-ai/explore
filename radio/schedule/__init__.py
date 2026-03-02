@@ -23,6 +23,10 @@ def get_scraper(name: Optional[str], **kwargs) -> Optional[BaseScheduleScraper]:
         from .eco99fm import Eco99FmScheduleScraper
         return Eco99FmScheduleScraper()
 
+    if name == "kolhai":
+        from .kolhai import KolHaiScheduleScraper
+        return KolHaiScheduleScraper(station_id=kwargs.get("schedule_id", "2"))
+
     return None
 
 
