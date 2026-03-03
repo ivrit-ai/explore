@@ -19,6 +19,7 @@ from .base import BaseScheduleScraper, ProgramSlot
 log = logging.getLogger(__name__)
 
 KAN_RADIO_URL = "https://www.kan.org.il/radio/"
+KAN_TV_URL = "https://www.kan.org.il/tv-guide/"
 
 
 class KanScheduleScraper(BaseScheduleScraper):
@@ -83,6 +84,42 @@ class KanScheduleScraper(BaseScheduleScraper):
             title=title,
             description=item.get("Description"),
         )
+
+
+class KanTvScheduleScraper(KanScheduleScraper):
+    """Scrape TV schedule from kan.org.il/tv-guide/ page."""
+
+    def __init__(self, channel_id: str = "4444"):
+        super().__init__(channel_id=channel_id)
+
+    def _fetch(self, day: date) -> list[ProgramSlot]:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "text/html, */*",
+        }
+        req = Request(KAN_TV_URL, headers=headers)
+        with urlopen(req, timeout=15) as resp:
+            html = resp.read().decode("utf-8", errors="replace")
+
+        target_id = str(self.channel_id)
+        for m in re.finditer(r"liveSchedule\.push\((\{.*?\})\);", html, re.DOTALL):
+            try:
+                data = json.loads(m.group(1))
+            except json.JSONDecodeError:
+                continue
+            if str(data.get("ChannelId")) != target_id:
+                continue
+
+            slots: list[ProgramSlot] = []
+            for item in data.get("SchedulelItems", []):
+                slot = self._parse_item(item, day)
+                if slot:
+                    slots.append(slot)
+            slots.sort(key=lambda s: s.start)
+            return slots
+
+        log.warning("Channel %s not found in Kan TV guide page", self.channel_id)
+        return []
 
 
 def _parse_time(s: str) -> Optional[time]:

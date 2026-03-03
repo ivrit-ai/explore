@@ -15,6 +15,7 @@ class StationConfig:
     url: str
     schedule_scraper: Optional[str] = None
     schedule_id: Optional[str] = None
+    is_tv: bool = False  # True for TV channels (HLS video+audio → audio-only recording)
 
 
 @dataclass
@@ -70,6 +71,7 @@ def load_config(path: Optional[str | Path] = None) -> RadioConfig:
             url=station_raw["url"],
             schedule_scraper=station_raw.get("schedule_scraper"),
             schedule_id=station_raw.get("schedule_id"),
+            is_tv=bool(station_raw.get("is_tv", False)),
         )
 
     return cfg

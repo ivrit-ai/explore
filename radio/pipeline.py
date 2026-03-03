@@ -13,6 +13,12 @@ import logging
 import sys
 from pathlib import Path
 
+# Ensure stdout handles Unicode (needed on Windows with Hebrew filenames)
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 from .config import load_config
 from .record import record_station
 from .split import split_recording

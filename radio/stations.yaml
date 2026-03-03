@@ -67,3 +67,16 @@ stations:
   106fm:
     name: "106FM"
     url: "https://1062onair.runi.ac.il/idc123.mp3"
+
+  channel14:
+    name: "ערוץ 14"
+    url: "https://r.il.cdn-redge.media/livehls/oil/ch14/live/ch14/live.livx/playlist.m3u8"
+    is_tv: true
+    schedule_scraper: c14
+
+  kan11:
+    name: "כאן 11"
+    url: "https://kancdn.medonecdn.net/livehls/oil/kancdn-live/live/kan11/live.livx/playlist.m3u8"
+    is_tv: true
+    schedule_scraper: kan_tv
+    schedule_id: "4444"

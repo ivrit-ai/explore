@@ -15,6 +15,10 @@ def get_scraper(name: Optional[str], **kwargs) -> Optional[BaseScheduleScraper]:
         from .kan import KanScheduleScraper
         return KanScheduleScraper(channel_id=kwargs.get("schedule_id", "8"))
 
+    if name == "kan_tv":
+        from .kan import KanTvScheduleScraper
+        return KanTvScheduleScraper(channel_id=kwargs.get("schedule_id", "4444"))
+
     if name == "glz":
         from .glz import GlzScheduleScraper
         return GlzScheduleScraper(root_id=kwargs.get("schedule_id", "1920"))
@@ -26,6 +30,10 @@ def get_scraper(name: Optional[str], **kwargs) -> Optional[BaseScheduleScraper]:
     if name == "kolhai":
         from .kolhai import KolHaiScheduleScraper
         return KolHaiScheduleScraper(station_id=kwargs.get("schedule_id", "2"))
+
+    if name == "c14":
+        from .c14 import Channel14ScheduleScraper
+        return Channel14ScheduleScraper()
 
     return None
 

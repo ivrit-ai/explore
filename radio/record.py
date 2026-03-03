@@ -88,17 +88,30 @@ def record_station(
     timestamp = start_time.strftime("%Y-%m-%d_%H%M%S")
     out_path = out_dir / f"{timestamp}.mp3"
 
-    cmd = [
-        "ffmpeg", "-y",
-        "-reconnect", "1",
-        "-reconnect_streamed", "1",
-        "-reconnect_delay_max", "30",
-        "-i", station.url,
-        "-t", str(duration),
-        "-acodec", "copy",
-        "-v", "warning",
-        str(out_path),
-    ]
+    if station.is_tv:
+        # HLS TV stream: strip video, re-encode audio to MP3
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", station.url,
+            "-t", str(duration),
+            "-vn",
+            "-acodec", "libmp3lame",
+            "-b:a", "128k",
+            "-v", "warning",
+            str(out_path),
+        ]
+    else:
+        cmd = [
+            "ffmpeg", "-y",
+            "-reconnect", "1",
+            "-reconnect_streamed", "1",
+            "-reconnect_delay_max", "30",
+            "-i", station.url,
+            "-t", str(duration),
+            "-acodec", "copy",
+            "-v", "warning",
+            str(out_path),
+        ]
 
     log.info("Recording %s for %ds → %s", station.key, duration, out_path)
     try:
