@@ -1,105 +1,105 @@
-"""Record live radio streams using ffmpeg."""
+"""Record live radio streams continuously using ffmpeg segment muxer.
+
+Produces 1-hour opus chunks aligned to clock hours (8:00, 9:00, …).
+The stream is transcoded to opus once during recording so that splitting
+is a simple copy (no re-encoding).  When ffmpeg closes a completed chunk
+and moves to the next hour, the completed chunk is split into per-program
+segments in a background thread.
+"""
 from __future__ import annotations
 
-import json
 import logging
+import os
+import signal
 import subprocess
-from datetime import datetime
+import threading
 from pathlib import Path
-from typing import Optional
 
 from .config import RadioConfig, StationConfig
-from .schedule import get_scraper
+
+# All timestamps (filenames, schedules) use Israel time
+_IL_ENV = {**os.environ, "TZ": "Asia/Jerusalem"}
 
 log = logging.getLogger(__name__)
 
 MIN_FILE_SIZE = 100 * 1024  # 100 KB — discard tiny/empty files
+CHUNK_DURATION = 3600       # 1 hour per chunk
 
 
-def _collect_metadata(
-    station: StationConfig,
-    config: RadioConfig,
-    out_path: Path,
-    duration: int,
-    start_time: datetime,
-) -> dict:
-    """Collect recording metadata: station info, timestamps, schedule, stream info."""
-    meta: dict = {
-        "station_key": station.key,
-        "station_name": station.name,
-        "stream_url": station.url,
-        "start_time": start_time.isoformat(),
-        "requested_duration": duration,
-    }
+def _split_chunk(mp3_path: Path, station: StationConfig, config: RadioConfig):
+    """Split a completed MP3 chunk into program segments (runs in background thread)."""
+    from .split import split_recording
 
-    # Probe actual duration and stream info from the recorded file
-    if out_path.exists():
-        meta["file_size"] = out_path.stat().st_size
-        try:
-            probe = subprocess.run(
-                ["ffprobe", "-v", "quiet", "-print_format", "json",
-                 "-show_format", "-show_streams", str(out_path)],
-                capture_output=True, text=True, timeout=15,
-            )
-            info = json.loads(probe.stdout)
-            fmt = info.get("format", {})
-            meta["actual_duration"] = float(fmt.get("duration", 0))
-            meta["format_name"] = fmt.get("format_name")
-            meta["bitrate"] = int(fmt.get("bit_rate", 0))
-            # Icecast metadata (title, genre, etc.) ends up in format tags
-            tags = fmt.get("tags", {})
-            if tags:
-                meta["stream_tags"] = tags
-        except Exception:
-            pass
+    try:
+        outputs = split_recording(mp3_path, station, config)
+        if outputs:
+            log.info("Split into %d segments, removing raw chunk %s", len(outputs), mp3_path.name)
+            mp3_path.unlink()
+        else:
+            log.warning("Split produced no output for %s — keeping raw chunk", mp3_path.name)
+    except Exception:
+        log.exception("Split failed for %s — keeping raw chunk", mp3_path.name)
 
-    # Fetch schedule for the recording window
-    scraper = get_scraper(station.schedule_scraper, schedule_id=station.schedule_id or "")
-    if scraper:
-        try:
-            schedule = scraper.get_schedule(start_time.date())
-            if schedule:
-                meta["schedule"] = [
-                    {"start": s.start.isoformat(), "end": s.end.isoformat(),
-                     "title": s.title}
-                    for s in schedule
-                ]
-        except Exception:
-            log.debug("Failed to fetch schedule for metadata", exc_info=True)
 
-    return meta
+def _process_completed_chunk(mp3_path: Path, station: StationConfig, config: RadioConfig, split_threads: list[threading.Thread]):
+    """Dispatch split of a completed chunk to a background thread."""
+    size = mp3_path.stat().st_size
+    if size < MIN_FILE_SIZE:
+        log.warning("Discarding tiny chunk %s (%d bytes)", mp3_path.name, size)
+        mp3_path.unlink()
+        return
+    log.info("Completed chunk: %s (%d KB) — dispatching split", mp3_path.name, size // 1024)
+    t = threading.Thread(target=_split_chunk, args=(mp3_path, station, config), daemon=True)
+    t.start()
+    split_threads.append(t)
+
+
+def _segment_list_reader(proc: subprocess.Popen, station: StationConfig, config: RadioConfig, out_dir: Path, split_threads: list[threading.Thread]):
+    """Read completed segment filenames from ffmpeg stdout and dispatch splitting."""
+    for line in proc.stdout:
+        name = line.strip()
+        if not name:
+            continue
+        mp3_path = out_dir / name
+        if mp3_path.exists():
+            _process_completed_chunk(mp3_path, station, config, split_threads)
 
 
 def record_station(
     station: StationConfig,
     config: RadioConfig,
-    duration: Optional[int] = None,
-) -> Optional[Path]:
-    """Record a radio station stream for the given duration.
+) -> subprocess.Popen:
+    """Start recording a station continuously, producing hour-aligned MP3 chunks.
 
-    Saves a metadata JSON sidecar alongside the MP3.
-    Returns the path to the recorded MP3 file, or None on failure.
+    Each completed hourly chunk is automatically split into per-program
+    segments in a background thread while recording continues.
+
+    Returns the ffmpeg Popen handle (caller manages lifecycle).
     """
-    duration = duration or config.duration
     out_dir = config.raw_dir / station.key
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    start_time = datetime.now()
-    timestamp = start_time.strftime("%Y-%m-%d_%H%M%S")
-    out_path = out_dir / f"{timestamp}.mp3"
+    pattern = str(out_dir / "%Y-%m-%d_%H%M%S.opus")
+
+    common_output_args = [
+        "-acodec", "libopus",
+        "-b:a", config.opus_bitrate,
+        "-ac", str(config.opus_channels),
+        "-ar", str(config.opus_sample_rate),
+        "-f", "segment",
+        "-segment_format", "ogg",
+        "-segment_time", str(CHUNK_DURATION),
+        "-segment_atclocktime", "1",
+        "-strftime", "1",
+        "-segment_list", "pipe:1",
+        "-reset_timestamps", "1",
+        "-v", "warning",
+        pattern,
+    ]
 
     if station.is_tv:
-        # HLS TV stream: strip video, re-encode audio to MP3
-        cmd = [
-            "ffmpeg", "-y",
-            "-i", station.url,
-            "-t", str(duration),
-            "-vn",
-            "-acodec", "libmp3lame",
-            "-b:a", "128k",
-            "-v", "warning",
-            str(out_path),
-        ]
+        # HLS TV stream: strip video, encode audio to opus segments
+        cmd = ["ffmpeg", "-y", "-i", station.url, "-vn"] + common_output_args
     else:
         cmd = [
             "ffmpeg", "-y",
@@ -107,33 +107,74 @@ def record_station(
             "-reconnect_streamed", "1",
             "-reconnect_delay_max", "30",
             "-i", station.url,
-            "-t", str(duration),
-            "-acodec", "copy",
-            "-v", "warning",
-            str(out_path),
-        ]
+        ] + common_output_args
 
-    log.info("Recording %s for %ds → %s", station.key, duration, out_path)
+    log.info(
+        "Recording %s continuously (1h chunks, hour-aligned, until stopped) → %s",
+        station.key, out_dir,
+    )
+
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True, env=_IL_ENV)
+    split_threads: list[threading.Thread] = []
+
+    reader = threading.Thread(
+        target=_segment_list_reader, args=(proc, station, config, out_dir, split_threads), daemon=True,
+    )
+    reader.start()
+
+    # Store references on the proc so the caller can join them on shutdown
+    proc._reader_thread = reader          # type: ignore[attr-defined]
+    proc._split_threads = split_threads   # type: ignore[attr-defined]
+    proc._station_key = station.key       # type: ignore[attr-defined]
+
+    return proc
+
+
+def record_stations(
+    stations: list[StationConfig],
+    config: RadioConfig,
+) -> None:
+    """Record multiple stations in parallel, each in its own thread.
+
+    All ffmpeg processes and their split threads release the GIL during
+    I/O (subprocess wait / pipe reads), so they run truly in parallel.
+
+    Blocks until interrupted (Ctrl-C), then shuts down all processes.
+    """
+    procs: list[subprocess.Popen] = []
+
+    for station in stations:
+        proc = record_station(station, config)
+        procs.append(proc)
+
+    log.info("Recording %d station(s) — press Ctrl-C to stop", len(procs))
+
+    # Block until interrupted
     try:
-        subprocess.run(cmd, check=True, timeout=duration + 120)
-    except subprocess.TimeoutExpired:
-        log.warning("ffmpeg timed out for %s — keeping partial file", station.key)
-    except subprocess.CalledProcessError as exc:
-        log.error("ffmpeg failed for %s (rc=%d)", station.key, exc.returncode)
+        for proc in procs:
+            proc.wait()
+    except KeyboardInterrupt:
+        log.info("Stopping all recordings...")
 
-    # Keep partial recordings if they're large enough
-    if out_path.exists():
-        size = out_path.stat().st_size
-        if size >= MIN_FILE_SIZE:
-            log.info("Recorded %s (%d KB)", out_path.name, size // 1024)
-            # Save metadata sidecar
-            meta = _collect_metadata(station, config, out_path, duration, start_time)
-            meta_path = out_path.with_suffix(".json")
-            meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-            log.info("Saved metadata: %s", meta_path.name)
-            return out_path
-        else:
-            log.warning("Discarding tiny file %s (%d bytes)", out_path, size)
-            out_path.unlink()
+    # Signal all ffmpeg processes to stop
+    for proc in procs:
+        if proc.poll() is None:
+            proc.send_signal(signal.SIGINT)
+    for proc in procs:
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
 
-    return None
+    # Wait for reader and split threads to finish
+    for proc in procs:
+        proc._reader_thread.join(timeout=5)   # type: ignore[attr-defined]
+        for t in proc._split_threads:          # type: ignore[attr-defined]
+            t.join()
+
+    for proc in procs:
+        key = proc._station_key               # type: ignore[attr-defined]
+        out_dir = config.raw_dir / key
+        chunks = sorted(out_dir.glob("*.opus"))
+        log.info("Recording finished for %s: %d remaining chunks", key, len(chunks))

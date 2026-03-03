@@ -776,6 +776,166 @@ class IndexManager:
         
         return rec_idx, rec.id, {"full": full, "segments": segments_data}, read_ms, conv_ms
 
+    @staticmethod
+    def _flush_batches(db, batch_docs, batch_fts, batch_mapping, batch_segments):
+        """Flush pending document/FTS/segment batches to the database.
+
+        Returns cleared lists: ([], [], [], [])
+        """
+        if batch_docs:
+            db.batch_execute(
+                """INSERT INTO documents
+                (doc_id, uuid, source, episode, episode_date, episode_title)
+                VALUES (?, ?, ?, ?, ?, ?)""",
+                batch_docs
+            )
+
+            for idx, full_text in enumerate(batch_fts):
+                cursor = db.execute(
+                    "INSERT INTO documents_fts(full_text) VALUES (?)",
+                    [full_text]
+                )
+                fts_rowid = cursor.lastrowid
+                doc_id = batch_docs[idx][0]
+                batch_mapping.append((fts_rowid, doc_id))
+
+            db.batch_execute(
+                "INSERT INTO fts_doc_mapping(fts_rowid, doc_id) VALUES (?, ?)",
+                batch_mapping
+            )
+
+        if batch_segments:
+            db.batch_execute(
+                """INSERT INTO segments
+                (doc_id, segment_id, segment_text, avg_logprob,
+                    char_offset, start_time, end_time)
+                VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                batch_segments
+            )
+
+        return [], [], [], []
+
+    def add_documents(self, file_records: List[FileRecord]) -> tuple[int, int]:
+        """Add new documents to an existing index, skipping duplicates.
+
+        Returns (added_count, skipped_count).
+        """
+        import queue
+        import threading
+
+        log = logging.getLogger("index")
+        db = self._index._db
+
+        # Get existing episodes for duplicate detection
+        cursor = db.execute("SELECT episode FROM documents")
+        existing_episodes = {row[0] for row in cursor}
+        log.info(f"Existing episodes in DB: {len(existing_episodes)}")
+
+        # Filter to new records only
+        new_records = [(i, rec) for i, rec in enumerate(file_records)
+                       if rec.id not in existing_episodes]
+        skipped = len(file_records) - len(new_records)
+        log.info(f"New episodes: {len(new_records)}, skipped (already present): {skipped}")
+
+        if not new_records:
+            return 0, skipped
+
+        # Get next available doc_id
+        cursor = db.execute("SELECT COALESCE(MAX(doc_id), -1) FROM documents")
+        next_doc_id = cursor.fetchone()[0] + 1
+        log.info(f"Next doc_id: {next_doc_id}")
+
+        # Worker to load and convert a single record
+        def load_worker(offset, rec):
+            doc_id = next_doc_id + offset
+            data = rec.read_json()
+            full, segments = _episode_to_string_and_segments(data)
+            episode_date, episode_title = self.split_episode(rec.id)
+            source = rec.id.rsplit('/', 1)[0]
+            doc_uuid = str(uuid.uuid4())
+
+            segment_rows = [
+                (doc_id, s_idx, seg["text"], seg.get("avg_logprob", 0.0),
+                 seg["char_offset"], seg["start"], seg["end"])
+                for s_idx, seg in enumerate(segments)
+            ]
+
+            document_row = (doc_id, doc_uuid, source, rec.id, episode_date, episode_title)
+            return doc_id, document_row, segment_rows, full
+
+        # Queue + writer thread (same pattern as _build but without index drop/recreate)
+        write_queue = queue.Queue(maxsize=2000)
+        finished_producers = False
+        DOCS_PER_TX = 1000
+
+        def writer_thread():
+            nonlocal finished_producers
+            db.execute("BEGIN")
+            docs_in_tx = 0
+            batch_docs, batch_fts, batch_mapping, batch_segments = [], [], [], []
+            DOC_BATCH_SIZE = 1000
+            SEGMENT_BATCH_SIZE = 30000
+
+            while True:
+                try:
+                    item = write_queue.get(timeout=0.2)
+                except queue.Empty:
+                    if finished_producers:
+                        break
+                    continue
+                if item is None:
+                    break
+
+                doc_row, seg_rows, full_text = item
+                batch_docs.append(doc_row)
+                batch_segments.extend(seg_rows)
+                batch_fts.append(full_text)
+                docs_in_tx += 1
+
+                if len(batch_docs) >= DOC_BATCH_SIZE or len(batch_segments) >= SEGMENT_BATCH_SIZE:
+                    batch_docs, batch_fts, batch_mapping, batch_segments = \
+                        IndexManager._flush_batches(db, batch_docs, batch_fts, batch_mapping, batch_segments)
+
+                if docs_in_tx >= DOCS_PER_TX:
+                    batch_docs, batch_fts, batch_mapping, batch_segments = \
+                        IndexManager._flush_batches(db, batch_docs, batch_fts, batch_mapping, batch_segments)
+                    db.commit()
+                    db.execute("BEGIN")
+                    docs_in_tx = 0
+
+            IndexManager._flush_batches(db, batch_docs, batch_fts, batch_mapping, batch_segments)
+            db.commit()
+
+        writer = threading.Thread(target=writer_thread)
+        writer.start()
+
+        # Produce parsed rows
+        cpu_threads = min(16, os.cpu_count() or 4)
+        total = len(new_records)
+        log.info(f"Parsing & queueing {total} new files...")
+
+        with ThreadPoolExecutor(max_workers=cpu_threads) as pool:
+            futures = [pool.submit(load_worker, offset, rec) for offset, (_, rec) in enumerate(new_records)]
+
+            from tqdm.auto import tqdm
+            with tqdm(total=total, desc="Adding documents", unit="file") as pbar:
+                for fut in futures:
+                    doc_id, document_row, segment_rows, full_text = fut.result()
+                    write_queue.put((document_row, segment_rows, full_text))
+                    pbar.update(1)
+
+        finished_producers = True
+        writer.join()
+
+        # Optimize FTS5 index
+        log.info("Optimizing FTS5 index...")
+        db.execute("INSERT INTO documents_fts(documents_fts) VALUES('optimize')")
+        db.commit()
+
+        added = len(new_records)
+        log.info(f"Added {added} new documents (skipped {skipped})")
+        return added, skipped
+
     def _build(self) -> TranscriptIndex:
         """
         Optimized index builder with CHUNKED TRANSACTIONS to prevent WAL explosion,
@@ -888,133 +1048,25 @@ class IndexManager:
 
                 batch_docs.append(doc_row)
                 batch_segments.extend(seg_rows)
-                batch_fts.append(full_text)  # Store full_text for FTS5
+                batch_fts.append(full_text)
                 docs_in_tx += 1
 
-                # Flush docs if needed
-                if len(batch_docs) >= DOC_BATCH_SIZE:
-                    # Insert documents (WITHOUT full_text)
-                    db.batch_execute(
-                        """INSERT INTO documents
-                        (doc_id, uuid, source, episode, episode_date, episode_title)
-                        VALUES (?, ?, ?, ?, ?, ?)""",
-                        batch_docs
-                    )
-
-                    # Insert into FTS5 and build mapping
-                    for idx, full_text in enumerate(batch_fts):
-                        cursor = db.execute(
-                            "INSERT INTO documents_fts(full_text) VALUES (?)",
-                            [full_text]
-                        )
-                        fts_rowid = cursor.lastrowid
-                        doc_id = batch_docs[idx][0]  # First element is doc_id
-                        batch_mapping.append((fts_rowid, doc_id))
-
-                    # Insert mappings
-                    db.batch_execute(
-                        "INSERT INTO fts_doc_mapping(fts_rowid, doc_id) VALUES (?, ?)",
-                        batch_mapping
-                    )
-
-                    batch_docs = []
-                    batch_fts = []
-                    batch_mapping = []
-
-                # Flush segments if needed
-                if len(batch_segments) >= SEGMENT_BATCH_SIZE:
-                    db.batch_execute(
-                        """INSERT INTO segments 
-                        (doc_id, segment_id, segment_text, avg_logprob,
-                            char_offset, start_time, end_time)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                        batch_segments
-                    )
-                    batch_segments = []
+                # Flush docs if batch is full
+                if len(batch_docs) >= DOC_BATCH_SIZE or len(batch_segments) >= SEGMENT_BATCH_SIZE:
+                    batch_docs, batch_fts, batch_mapping, batch_segments = \
+                        IndexManager._flush_batches(db, batch_docs, batch_fts, batch_mapping, batch_segments)
 
                 # ⭐⭐ CHUNKED TRANSACTION: commit every N docs
                 if docs_in_tx >= DOCS_PER_TX:
-                    # Flush pending rows
-                    if batch_docs:
-                        # Insert documents (WITHOUT full_text)
-                        db.batch_execute(
-                            """INSERT INTO documents
-                            (doc_id, uuid, source, episode, episode_date, episode_title)
-                            VALUES (?, ?, ?, ?, ?, ?)""",
-                            batch_docs
-                        )
-
-                        # Insert into FTS5 and build mapping
-                        for idx, full_text in enumerate(batch_fts):
-                            cursor = db.execute(
-                                "INSERT INTO documents_fts(full_text) VALUES (?)",
-                                [full_text]
-                            )
-                            fts_rowid = cursor.lastrowid
-                            doc_id = batch_docs[idx][0]  # First element is doc_id
-                            batch_mapping.append((fts_rowid, doc_id))
-
-                        # Insert mappings
-                        db.batch_execute(
-                            "INSERT INTO fts_doc_mapping(fts_rowid, doc_id) VALUES (?, ?)",
-                            batch_mapping
-                        )
-
-                        batch_docs = []
-                        batch_fts = []
-                        batch_mapping = []
-
-                    if batch_segments:
-                        db.batch_execute(
-                            """INSERT INTO segments 
-                            (doc_id, segment_id, segment_text, avg_logprob,
-                                char_offset, start_time, end_time)
-                            VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                            batch_segments
-                        )
-                        batch_segments = []
-
-                    # Commit and start fresh TX
+                    batch_docs, batch_fts, batch_mapping, batch_segments = \
+                        IndexManager._flush_batches(db, batch_docs, batch_fts, batch_mapping, batch_segments)
                     db.commit()
                     db.execute("BEGIN")
                     docs_in_tx = 0
 
             # ----- FINAL FLUSH & COMMIT -----
-            if batch_docs:
-                # Insert documents (WITHOUT full_text)
-                db.batch_execute(
-                    """INSERT INTO documents
-                    (doc_id, uuid, source, episode, episode_date, episode_title)
-                    VALUES (?, ?, ?, ?, ?, ?)""",
-                    batch_docs
-                )
-
-                # Insert into FTS5 and build mapping
-                for idx, full_text in enumerate(batch_fts):
-                    cursor = db.execute(
-                        "INSERT INTO documents_fts(full_text) VALUES (?)",
-                        [full_text]
-                    )
-                    fts_rowid = cursor.lastrowid
-                    doc_id = batch_docs[idx][0]  # First element is doc_id
-                    batch_mapping.append((fts_rowid, doc_id))
-
-                # Insert mappings
-                db.batch_execute(
-                    "INSERT INTO fts_doc_mapping(fts_rowid, doc_id) VALUES (?, ?)",
-                    batch_mapping
-                )
-
-            if batch_segments:
-                db.batch_execute(
-                    """INSERT INTO segments 
-                    (doc_id, segment_id, segment_text, avg_logprob,
-                        char_offset, start_time, end_time)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                    batch_segments
-                )
-
-            db.commit()  # final commit
+            IndexManager._flush_batches(db, batch_docs, batch_fts, batch_mapping, batch_segments)
+            db.commit()
 
         # Start writer thread
         writer = threading.Thread(target=writer_thread)
