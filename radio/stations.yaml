@@ -81,6 +81,12 @@ stations:
     is_tv: true
     schedule_scraper: ch13
 
+  i24news_he:
+    name: "i24NEWS עברית"
+    url: "https://fastly.live.brightcove.com/6386790215112/eu-central-1/5377161796001/eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJob3N0IjoiZXJmajYzLmVncmVzcy53YzQ3bTEiLCJhY2NvdW50X2lkIjoiNTM3NzE2MTc5NjAwMSIsImVobiI6ImZhc3RseS5saXZlLmJyaWdodGNvdmUuY29tIiwiaXNzIjoiYmxpdmUtcGxheWJhY2stc291cmNlLWFwaSIsInN1YiI6InBhdGhtYXB0b2tlbiIsImF1ZCI6WyI1Mzc3MTYxNzk2MDAxIl0sImp0aSI6IjYzODY3OTAyMTUxMTIifQ.8ZawImK7DfcrrXeAT2OVZ62qQJrJiBaoc7Y1DNNq1bg/playlist-hls.m3u8"
+    is_tv: true  # Brightcove JWT in path has no exp; stable without hdnea Fastly token
+    # schedule_scraper: not yet found — will fall back to 30-min chunks
+
   channel12:
     name: "ערוץ 12"
     url: "https://mako-streaming.akamaized.net/n12/hls/live/2103938/k12/index.m3u8"  # geo-restricted: Israel only (Akamai blocks external IPs)
