@@ -56,13 +56,24 @@ def _process_completed_chunk(mp3_path: Path, station: StationConfig, config: Rad
 
 def _segment_list_reader(proc: subprocess.Popen, station: StationConfig, config: RadioConfig, out_dir: Path, split_threads: list[threading.Thread]):
     """Read completed segment filenames from ffmpeg stdout and dispatch splitting."""
+    segments_seen = 0
     for line in proc.stdout:
         name = line.strip()
         if not name:
             continue
+        segments_seen += 1
         mp3_path = out_dir / name
         if mp3_path.exists():
             _process_completed_chunk(mp3_path, station, config, split_threads)
+
+    # ffmpeg stdout closed — check for early failure (e.g. geo-blocked stream)
+    rc = proc.wait()
+    if rc != 0 and segments_seen == 0:
+        log.warning(
+            "ffmpeg exited with code %d for %s before producing any segments — "
+            "stream may be geo-restricted or unavailable",
+            rc, station.key,
+        )
 
 
 def record_station(

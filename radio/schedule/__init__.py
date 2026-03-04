@@ -35,6 +35,14 @@ def get_scraper(name: Optional[str], **kwargs) -> Optional[BaseScheduleScraper]:
         from .c14 import Channel14ScheduleScraper
         return Channel14ScheduleScraper()
 
+    if name == "ch13":
+        from .ch13 import Channel13ScheduleScraper
+        return Channel13ScheduleScraper()
+
+    if name == "mako":
+        from .mako import MakoScheduleScraper
+        return MakoScheduleScraper()
+
     return None
 
 

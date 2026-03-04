@@ -74,3 +74,15 @@ stations:
     is_tv: true
     schedule_scraper: kan_tv
     schedule_id: "4444"
+
+  reshet13:
+    name: "רשת 13"
+    url: "https://reshet.g-mana.live/media/4607e158-e4d4-4e18-9160-3dc3ea9bc677/mainManifest.m3u8"
+    is_tv: true
+    schedule_scraper: ch13
+
+  channel12:
+    name: "ערוץ 12"
+    url: "https://mako-streaming.akamaized.net/n12/hls/live/2103938/k12/index.m3u8"  # geo-restricted: Israel only (Akamai blocks external IPs)
+    is_tv: true
+    schedule_scraper: mako
