@@ -1,8 +1,20 @@
 #!/usr/bin/env python
 """ASGI entrypoint for uvicorn workers."""
+import logging
 import os
+import sys
 import argparse
 from pathlib import Path
+
+# Send application logs to stdout, which is what a container platform
+# collects. Without this only uvicorn's own output is ever visible, so the
+# audio backend, index backend and per-request timings go unrecorded.
+logging.basicConfig(
+    level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
+    force=True,
+)
 
 from app import create_app, init_index_manager
 from app.services.audio_store import build_audio_store
