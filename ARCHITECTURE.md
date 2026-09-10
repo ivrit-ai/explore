@@ -37,29 +37,40 @@
    └────────────────┘          └────────────────┘
 ```
 
+## Dependency Pinning
+
+`requirements.txt` pins exact versions. Templates call a Flask-compatible
+`url_for` shim in `app/templating.py`, which finds a route by the `name=`
+declared on its decorator. Starlette 1.0 stopped flattening included routers
+into `app.routes`, so the shim walks the router tree; a flat scan silently
+finds nothing and turns every page into a 500. When bumping versions, run the
+backend differential test and the route smoke test, and confirm `url_for` still
+resolves every name used in `app/templates/`.
+
 ## Tech Stack
 
 | Layer | Technology |
 |-------|-----------|
 | Language | Python 3 |
-| Web framework | Flask 2.x + Jinja2 templates |
+| Web framework | FastAPI + Jinja2 templates |
 | Database | SQLite with FTS5, or PostgreSQL with tsvector + GIN |
 | Search | FTS5 full-text indexing + Python `regex` post-filtering |
-| Auth | Google OAuth2 (flask-oauthlib) |
+| Auth | Google OAuth2 (Authlib) |
 | Analytics | PostHog (optional) |
 | Frontend | Vanilla JS + CSS (no framework), RTL Hebrew |
 | Audio | HTML5 `<audio>` with HTTP range requests; FFmpeg for export |
 | Audio storage | Local directory or S3 bucket (`app/services/audio_store.py`, boto3) |
-| Production server | uWSGI with SSL (Let's Encrypt) |
+| Production server | uvicorn behind a TLS-terminating reverse proxy |
 | Data parsing | orjson, pandas, duckdb |
 
 ## Directory Structure
 
 ```
 ├── app/
-│   ├── __init__.py              # Flask app factory (create_app, init_index_manager)
+│   ├── __init__.py              # App factory (create_app, init_index_manager)
 │   ├── cli.py                   # CLI for building/inspecting the index
 │   ├── utils.py                 # FileRecord, transcript discovery
+│   ├── templating.py            # Flask-compatible url_for over Starlette routing
 │   ├── routes/
 │   │   ├── main.py              # GET / (home), GET /search (results), GET /search/metadata
 │   │   ├── search.py            # JSON API: search hits, segment lookup
@@ -76,8 +87,9 @@
 │       ├── css/                 # style.css, results.css, login.css
 │       ├── js/                  # results.js (audio player), filters.js (date/source filters)
 │       └── img/                 # favicon, Google logo
-├── run.py                       # Production entry point (SSL, logging)
-├── wsgi.py                      # uWSGI entry point
+├── Dockerfile                   # Web-tier image (app + ffmpeg; no data baked in)
+├── run.py                       # Local/standalone entry point (uvicorn, logging)
+├── wsgi.py                      # ASGI entry point used by the container
 ├── app.py                       # Development entry point
 ├── start.sh                     # uWSGI production startup script
 ├── explore.sqlite               # FTS5 database (~6.4 GB, ~35K docs, ~33M segments)

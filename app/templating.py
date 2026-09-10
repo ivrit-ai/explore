@@ -3,6 +3,33 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse
 
 
+def _nested_routes(route):
+    """The routes contained by `route`, whatever shape the router uses.
+
+    Starlette <1.0 flattened included routers into app.routes. From 1.0 an
+    included router stays a single entry that holds its own routes, so a flat
+    scan finds nothing and every url_for lookup fails.
+    """
+    nested = getattr(route, "routes", None)
+    if nested is not None:
+        return nested
+    inner = getattr(route, "original_router", None)
+    return getattr(inner, "routes", None)
+
+
+def find_route(routes, name: str):
+    """Depth-first search for a route by its declared name."""
+    for route in routes:
+        if getattr(route, "name", None) == name:
+            return route
+        nested = _nested_routes(route)
+        if nested:
+            found = find_route(nested, name)
+            if found is not None:
+                return found
+    return None
+
+
 def render(request: Request, template_name: str, **context):
     """Render a Jinja2 template with a Flask-compatible url_for injected."""
     templates = request.app.state.templates
@@ -15,11 +42,7 @@ def render(request: Request, template_name: str, **context):
 
         # For named routes, separate path params from query params.
         # Starlette's url_for only accepts path params; extras become query string.
-        route = None
-        for r in request.app.routes:
-            if getattr(r, 'name', None) == name:
-                route = r
-                break
+        route = find_route(request.app.routes, name)
 
         if route is None:
             raise ValueError(f"No route named '{name}'")

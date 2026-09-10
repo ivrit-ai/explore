@@ -1,20 +1,19 @@
-# Pinned deliberately. The app's templates resolve routes by the name= kwarg on
-# the route decorators, and Starlette 1.x drops those names, so the whole web
-# stack is held at the versions this app is known to run on. Bump on purpose,
-# with a check that url_for still resolves, not implicitly at build time.
-fastapi==0.133.1
-starlette==0.52.1
-uvicorn[standard]==0.41.0
-authlib==1.6.8
-httpx==0.28.1
-python-multipart==0.0.22
+# Pinned to exact versions so a rebuild cannot silently change behaviour.
+# Upgrade deliberately: run the differential test and the route smoke test,
+# and check that url_for still resolves every template route name.
+fastapi==0.141.1
+starlette==1.6.0
+uvicorn[standard]==0.52.4
+authlib==1.8.0
+httpx2==2.12.0
+python-multipart==0.0.32
 jinja2==3.1.6
-click==8.3.1
-orjson==3.11.7
-python-dotenv==1.2.1
-tqdm==4.67.3
-regex==2026.2.19
-posthog==7.9.4
+click==8.5.0
+orjson==3.12.0
+python-dotenv==1.2.3
+tqdm==4.70.0
+regex==2026.9.10
+posthog==7.49.0
 itsdangerous==2.2.0
 pyyaml==6.0.3
 boto3==1.43.91
