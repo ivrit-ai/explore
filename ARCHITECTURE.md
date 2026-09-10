@@ -210,10 +210,22 @@ seek transfers only the bytes the player asked for.
 `scripts/migrate_sqlite_to_postgres.py`; the app never builds it at startup.
 
 Both backends use the same two-stage search: the full-text index narrows to
-candidate documents, then a `regex` pass over those documents' text finds the
+candidate documents, then a second pass over those documents' text finds the
 exact hit offsets. Only the second stage decides results, so the candidate
 filter must never exclude a real match — it may over-include, at the cost of a
 wasted scan.
+
+Where that second stage runs differs. SQLite pulls each candidate document's
+text into the app and scans it with Python's `regex`. Postgres does it in SQL
+for exact and partial mode, splitting the text on the search term and turning
+the gap lengths into offsets in one pass per document, so only `(doc_id,
+offset)` pairs cross the wire and no transcript text is transferred at all. At
+the default page of 20 documents that is about 1 MB saved per search, and at
+the 5000-document maximum about 266 MB.
+
+User-supplied regexes stay in Python. Its dialect is not Postgres' Advanced
+Regular Expressions — `\b` is a word boundary in one and a backspace in the
+other — so running them server-side would quietly change what a pattern means.
 
 That constraint shapes exact (phrase) search on Postgres. tsvector positions
 are held in 14 bits, so a document long enough to pass position 16383 has

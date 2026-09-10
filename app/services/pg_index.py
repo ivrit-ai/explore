@@ -38,6 +38,54 @@ def _quote_lexeme(token: str) -> str:
     return "'" + token.replace("'", "''") + "'"
 
 
+# Metacharacters of Postgres' Advanced Regular Expressions.
+_ARE_META = set(r"\^$.[]|()*+?{}")
+
+
+def _escape_are(text: str) -> str:
+    """Escape a literal for use inside a Postgres regular expression."""
+    return "".join("\\" + ch if ch in _ARE_META else ch for ch in text)
+
+
+def match_pattern(query: str, search_mode: str) -> str:
+    """The Postgres pattern matching the same text as the Python post-filter.
+
+    ``\\y`` is Postgres' word boundary; ``\\b`` means backspace there, so it
+    cannot be reused from the Python pattern directly.
+    """
+    literal = _escape_are(query)
+    return rf"\y{literal}\y" if search_mode == "exact" else literal
+
+
+# Modes whose hit offsets Postgres can compute itself. Both match a
+# fixed-length literal, which is what makes the split arithmetic below work.
+# User-supplied regexes stay in Python: its dialect is not Postgres ARE, so
+# running them server-side would quietly change what a pattern means.
+SERVER_SIDE_MODES = frozenset({"exact", "partial"})
+
+# Offsets for every match, without shipping any transcript text. Splitting on
+# the needle yields the gaps between matches; a running sum of gap lengths plus
+# one needle length per preceding match reconstructs each 0-based offset. One
+# pass over each document, and only (doc_id, offset) pairs come back.
+_OFFSETS_SQL = """
+    WITH parts AS (
+        SELECT d.doc_id, p.ord, char_length(p.part) AS len
+        FROM documents d,
+             regexp_split_to_table(d.full_text, %s) WITH ORDINALITY AS p(part, ord)
+        WHERE d.doc_id = ANY(%s)
+    ), cum AS (
+        SELECT doc_id, ord,
+               SUM(len) OVER (PARTITION BY doc_id ORDER BY ord) AS cumlen,
+               COUNT(*)  OVER (PARTITION BY doc_id) AS nparts
+        FROM parts
+    )
+    SELECT doc_id, cumlen + (ord - 1) * %s AS char_offset
+    FROM cum
+    WHERE ord < nparts
+    ORDER BY doc_id, char_offset
+"""
+
+
 # Postgres stores tsvector positions in 14 bits and clamps everything past
 # this onto the last slot, which breaks adjacency (``<->``) beyond that point.
 TSV_MAX_POSITION = 16383
@@ -310,7 +358,6 @@ class PostgresTranscriptIndex:
                     seed: Optional[int] = None) -> tuple[list[tuple[int, int]], bool]:
         """Candidate docs from the GIN index, then a regex pass for exact offsets."""
         import random as random_mod
-        import regex
 
         if search_mode not in ("exact", "partial", "regex"):
             raise ValueError(f"Unknown search mode: {search_mode}")
@@ -361,42 +408,66 @@ class PostgresTranscriptIndex:
         if not page_ids:
             return [], False
 
-        # ── 3. regex post-filter, chunked so peak memory stays bounded ──
-        if search_mode == "exact":
-            pattern = r"\b" + regex.escape(query) + r"\b"
-        elif search_mode == "partial":
-            pattern = regex.escape(query)
+        # ── 3. find exact hit offsets ───────────────────────────────────
+        t_scan = time.perf_counter()
+        if search_mode in SERVER_SIDE_MODES:
+            hits = self._offsets_in_db(query, search_mode, page_ids)
+            where = "db"
         else:
-            pattern = query
+            hits = self._offsets_in_python(query, page_ids)
+            if hits is None:
+                return [], False
+            where = "python"
+        t_scan_done = time.perf_counter()
+
+        logger.info(
+            "[BENCH] %s%s: ids=%.1fms, match(%s)=%.1fms (%d docs), %d hits, "
+            "has_more=%s, total=%.1fms",
+            search_mode, " shuffle" if seed is not None else "", where,
+            (t_ids_done - t_ids) * 1000, (t_scan_done - t_scan) * 1000,
+            len(page_ids), len(hits), has_more, (time.perf_counter() - t_start) * 1000,
+        )
+        return hits, has_more
+
+    def _offsets_in_db(self, query: str, search_mode: str,
+                       page_ids: Sequence[int]) -> list[tuple[int, int]]:
+        """Hit offsets computed by Postgres; no transcript text crosses the wire."""
+        rows = self._query(
+            _OFFSETS_SQL,
+            [match_pattern(query, search_mode), list(page_ids), len(query)],
+        )
+        by_doc: dict[int, list[int]] = {}
+        for doc_id, offset in rows:
+            by_doc.setdefault(doc_id, []).append(offset)
+        # Emit in page order, which shuffle mode relies on.
+        return [(doc_id, off) for doc_id in page_ids for off in by_doc.get(doc_id, ())]
+
+    def _offsets_in_python(self, query: str,
+                           page_ids: Sequence[int]) -> Optional[list[tuple[int, int]]]:
+        """Fallback for user-supplied regexes, chunked to bound peak memory.
+
+        Returns None when the pattern will not compile.
+        """
+        import regex
 
         try:
-            compiled = regex.compile(pattern)
+            compiled = regex.compile(query)
         except regex.error as exc:
             logger.error("Invalid regex pattern %r: %s", query, exc)
-            return [], False
+            return None
 
         hits: list[tuple[int, int]] = []
-        t_scan = time.perf_counter()
-        for chunk in _chunks(page_ids, _TEXT_CHUNK):
-            rows = self._query(
+        for chunk in _chunks(list(page_ids), _TEXT_CHUNK):
+            texts = dict(self._query(
                 "SELECT doc_id, full_text FROM documents WHERE doc_id = ANY(%s)", [list(chunk)]
-            )
-            texts = dict(rows)
+            ))
             for doc_id in chunk:
                 full_text = texts.get(doc_id)
                 if full_text is None:
                     continue
                 hits.extend((doc_id, m.start()) for m in compiled.finditer(full_text))
             texts.clear()
-        t_scan_done = time.perf_counter()
-
-        logger.info(
-            "[BENCH] %s%s: ids=%.1fms, scan=%.1fms (%d docs), %d hits, has_more=%s, total=%.1fms",
-            search_mode, " shuffle" if seed is not None else "",
-            (t_ids_done - t_ids) * 1000, (t_scan_done - t_scan) * 1000,
-            len(page_ids), len(hits), has_more, (time.perf_counter() - t_start) * 1000,
-        )
-        return hits, has_more
+        return hits
 
 
 def _iso(value):
