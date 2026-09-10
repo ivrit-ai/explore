@@ -423,8 +423,8 @@ class PostgresTranscriptIndex:
         logger.info(
             "[BENCH] %s%s: ids=%.1fms, match(%s)=%.1fms (%d docs), %d hits, "
             "has_more=%s, total=%.1fms",
-            search_mode, " shuffle" if seed is not None else "", where,
-            (t_ids_done - t_ids) * 1000, (t_scan_done - t_scan) * 1000,
+            search_mode, " shuffle" if seed is not None else "",
+            (t_ids_done - t_ids) * 1000, where, (t_scan_done - t_scan) * 1000,
             len(page_ids), len(hits), has_more, (time.perf_counter() - t_start) * 1000,
         )
         return hits, has_more
