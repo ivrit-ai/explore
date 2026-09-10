@@ -55,7 +55,7 @@ resolves every name used in `app/templates/`.
 | Web framework | FastAPI + Jinja2 templates |
 | Database | SQLite with FTS5, or PostgreSQL with tsvector + GIN |
 | Search | FTS5 full-text indexing + Python `regex` post-filtering |
-| Auth | Google OAuth2 (Authlib) |
+| Auth | Platform-provided Google sign-in; RS256 cookie verified in-app (PyJWT) |
 | Analytics | PostHog (optional) |
 | Frontend | Vanilla JS + CSS (no framework), RTL Hebrew |
 | Audio | HTML5 `<audio>` with HTTP range requests; FFmpeg for export |
@@ -213,6 +213,29 @@ Audio requests support HTTP 206 Partial Content for efficient seeking. With the
 S3 backend the browser's `Range` header is passed straight through to S3, so a
 seek transfers only the bytes the player asked for.
 
+### Authentication
+
+Sign-in is the hosting platform's. It serves the reserved
+`/xhost-auth/login`, `/xhost-auth/logout` and `/xhost-auth/whoami` paths, runs
+the Google flow itself, and returns an RS256-signed JWT in the reserved
+`__Host-xhost_id` cookie. The platform does not tell the app who is calling, so
+`app/routes/auth.py` verifies that cookie and decides access itself.
+
+Verification pins `RS256` and selects the key by the token's `kid` rather than
+trusting the token's own `alg`, which is what defeats an algorithm-confusion
+forgery, and checks issuer, audience and expiry. Keys come from the platform's
+JWKS endpoint, cached by the client. `sub` is the stable identifier; emails can
+change.
+
+The audience is one exact hostname. `EXPLORE_AUTH_AUDIENCES` lists the
+hostnames a deployment accepts, which a custom domain needs; unset, it falls
+back to the host the request arrived on.
+
+An unauthenticated request to a gated route redirects to
+`/xhost-auth/login?return_to=<original path>`, so `/` answers 3xx and still
+satisfies the deploy health probe. There is no app-side session or
+client secret to hold.
+
 ### Search Index Backends
 
 `app/services/index.py` (SQLite + FTS5) and `app/services/pg_index.py`
@@ -320,29 +343,41 @@ PostHog wrapper. Tracks searches, page views, exports, and errors. Can be disabl
 - **RTL layout** — `lang="he" dir="rtl"`, Rubik font for Hebrew text.
 - **Templates** — Jinja2 with `base.html` layout, partials for pagination.
 
-## Authentication
+## Authentication Summary
 
-- **Production:** Google OAuth2 via flask-oauthlib. `@login_required` decorator on all content routes.
-- **Development:** Bypassed when `FLASK_ENV=development`; uses `TS_USER_EMAIL` env var as mock identity.
+- **Production:** the hosting platform's Google sign-in; the app verifies the
+  signed identity cookie itself. `Depends(require_login)` on all content
+  routes. See **Authentication** above for the verification rules.
+- **Development:** bypassed when `APP_ENV=development`, using `TS_USER_EMAIL`
+  as the mock identity.
 
 ## Configuration
 
 | Variable | Purpose |
 |----------|---------|
-| `SQLITE_PATH` | Path to SQLite database (default: `explore.sqlite`) |
-| `FLASK_ENV` | `development` / `production` |
-| `SECRET_KEY` | Flask session secret |
-| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | OAuth credentials |
+| `DATABASE_URL` | Postgres index connection (injected by the host) |
+| `EXPLORE_INDEX_BACKEND` | `auto` (default) / `sqlite` / `postgres` |
+| `SQLITE_PATH` | SQLite index path when that backend is used (default: `explore.sqlite`) |
+| `EXPLORE_AUDIO_SOURCE` | `auto` (default) / `local` / `s3` |
+| `EXPLORE_S3_BUCKET` / `EXPLORE_S3_PREFIX` | Bucket holding the audio tree |
+| `EXPLORE_S3_REGION` / `EXPLORE_S3_ENDPOINT_URL` | S3 region and custom endpoint (optional) |
+| `EXPLORE_S3_PRESIGN_TTL` | Lifetime of presigned URLs given to FFmpeg (default 3600) |
+| `EXPLORE_AUTH_AUDIENCES` | Hostnames whose identity tokens are accepted (defaults to the request host) |
+| `APP_ENV` | `development` / `production` |
+| `SECRET_KEY` | Session middleware secret |
 | `TS_USER_EMAIL` | Dev-mode email bypass |
 | `POSTHOG_API_KEY` / `POSTHOG_HOST` | Analytics (optional) |
 | `DISABLE_ANALYTICS` | `true` to disable PostHog |
 
 ## Deployment
 
-**Production** runs via uWSGI (`start.sh`) with:
-- 2 processes, 4 threads per process
-- HTTPS with Let's Encrypt certificates
-- 30-second request timeout (harakiri)
+**Production** runs the `Dockerfile` image: uvicorn serving `wsgi:app` on the
+port the host injects, with ffmpeg for segment export. Nothing large is baked
+in — audio comes from S3 and the index from Postgres, both configured by
+environment variable. TLS is terminated by the platform.
+
+`start.sh` still runs the app directly from a checkout for local or
+single-machine use.
 
 **Index build** is a separate CLI step (`python -m app.cli build --data-dir <path>`) that must run before the app starts. The `--auto-build` flag on `run.py` can trigger it at startup.
 

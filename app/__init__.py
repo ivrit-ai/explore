@@ -66,21 +66,20 @@ def create_app(data_dir: str = None, index_file: str = None,
     # Import and register routers
     from .routes import auth, main, search, export, audio
 
-    # Initialize Google OAuth in production
-    if os.environ.get('APP_ENV') != 'development':
-        auth.init_oauth(app)
-
     app.include_router(auth.router)
     app.include_router(main.router)
     app.include_router(search.router, prefix="/search")
     app.include_router(export.router)
     app.include_router(audio.router)
 
-    # Exception handler for login required
+    # Exception handler for login required. The platform's sign-in carries the
+    # return path itself, so there is nothing to stash server-side.
     @app.exception_handler(auth.LoginRequired)
     async def handle_login_required(request, exc):
-        request.session['next_url'] = str(request.url)
-        return RedirectResponse(url="/login", status_code=302)
+        return_to = request.url.path
+        if request.url.query:
+            return_to = f"{return_to}?{request.url.query}"
+        return RedirectResponse(url=auth.login_url(return_to), status_code=302)
 
     return app
 

@@ -63,8 +63,19 @@ AWS credentials come from the standard boto3 chain: environment variables,
 The bucket mirrors the local layout, so `audio/<source>/<episode>.opus` on disk
 becomes `s3://<bucket>/<prefix>/<source>/<episode>.opus`.
 
+## Authentication
+
+Sign-in is provided by the hosting platform, which serves `/xhost-auth/login`
+and `/xhost-auth/logout` and returns a signed identity cookie that the app
+verifies. There is no OAuth client ID or secret to configure.
+
+For local development, set `APP_ENV=development` and `TS_USER_EMAIL` to bypass
+sign-in.
+
 ## Environment Variables
 
+- `EXPLORE_AUTH_AUDIENCES`: Comma-separated hostnames whose identity tokens this
+  deployment accepts (needed for a custom domain; defaults to the request host)
 - `EXPLORE_AUDIO_SOURCE`: `auto` (default), `local` or `s3`
 - `EXPLORE_S3_BUCKET`: Bucket holding the audio tree
 - `EXPLORE_S3_PREFIX`: Key prefix within the bucket (default `audio`)
