@@ -38,32 +38,29 @@ def _quote_lexeme(token: str) -> str:
     return "'" + token.replace("'", "''") + "'"
 
 
+# Postgres stores tsvector positions in 14 bits and clamps everything past
+# this onto the last slot, which breaks adjacency (``<->``) beyond that point.
+TSV_MAX_POSITION = 16383
+
+
 def build_tsquery(query: str, search_mode: str) -> tuple[Optional[str], Optional[str]]:
     """Translate a user query into a tsquery.
-
-    The result is only a candidate filter — the regex post-filter decides the
-    actual hits — so it must never exclude a document that really matches. It
-    may include extras; those cost a wasted regex scan and nothing else.
-
-    That requirement rules out ``phraseto_tsquery`` for exact mode. Postgres
-    stores tsvector positions in 14 bits, so every word past position 16383 in
-    a document collapses onto that position and adjacency (``<->``) stops
-    working. Transcripts run well past 16383 words, so a phrase query silently
-    misses late occurrences. ANDing the tokens instead ignores positions
-    entirely and is a strict superset of the phrase match.
 
     Returns ``(sql_function, argument)`` where sql_function is the Postgres
     function to call and argument is passed as a bound parameter, or
     ``(None, None)`` when the query yields no usable tokens and the caller
     must fall back to scanning every document.
+
+    Exact mode returns the phrase form. It is only usable on documents short
+    enough to keep real positions; see ``_match_clause`` for how the long ones
+    are handled.
     """
     import regex
 
     if search_mode == "exact":
-        tokens = query.split()
-        if not tokens:
+        if not query.split():
             return None, None
-        return "to_tsquery", " & ".join(_quote_lexeme(t) for t in tokens)
+        return "phraseto_tsquery", query
 
     if search_mode == "partial":
         tokens = query.split()
@@ -78,6 +75,18 @@ def build_tsquery(query: str, search_mode: str) -> tuple[Optional[str], Optional
         return "to_tsquery", " & ".join(f"{_quote_lexeme(t)}:*" for t in tokens[:3])
 
     raise ValueError(f"Unknown search mode: {search_mode}")
+
+
+def build_and_tsquery(query: str) -> Optional[str]:
+    """The position-free fallback for exact mode: every token, ANDed.
+
+    A document containing the phrase necessarily contains all of its tokens,
+    so this is a strict superset of the phrase match and never misses one.
+    """
+    tokens = query.split()
+    if not tokens:
+        return None
+    return " & ".join(_quote_lexeme(t) for t in tokens)
 
 
 class PostgresTranscriptIndex:
@@ -100,11 +109,31 @@ class PostgresTranscriptIndex:
                 return cur.fetchone()
 
     def _match_clause(self, query: str, search_mode: str) -> tuple[Optional[str], list]:
-        """Build the tsvector WHERE fragment and its parameters."""
+        """Build the tsvector WHERE fragment and its parameters.
+
+        Exact mode is a union of two branches. Documents whose tsvector
+        positions are intact get a true phrase match. The 1% of transcripts
+        long enough to have their positions clamped at TSV_MAX_POSITION cannot
+        answer a phrase query at all, so they fall back to ANDing the tokens —
+        a superset, which the regex post-filter then narrows to real hits.
+
+        Splitting it this way keeps phrase precision for almost every document
+        instead of degrading the whole corpus to the AND filter, and the
+        overflow branch reads a partial index covering only those documents.
+        """
         func, arg = build_tsquery(query, search_mode)
         if func is None:
             return None, []
-        return f"d.full_text_tsv @@ {func}(%s, %s)", [_FTS_CONFIG, arg]
+
+        if search_mode != "exact":
+            return f"d.full_text_tsv @@ {func}(%s, %s)", [_FTS_CONFIG, arg]
+
+        and_arg = build_and_tsquery(query)
+        clause = (
+            "((NOT d.tsv_overflow AND d.full_text_tsv @@ phraseto_tsquery(%s, %s))"
+            " OR (d.tsv_overflow AND d.full_text_tsv @@ to_tsquery(%s, %s)))"
+        )
+        return clause, [_FTS_CONFIG, arg, _FTS_CONFIG, and_arg]
 
     @staticmethod
     def _append_filters(sql: str, params: list, date_from, date_to, sources) -> tuple[str, list]:
@@ -121,7 +150,9 @@ class PostgresTranscriptIndex:
 
     # ── document reads ──────────────────────────────────────────────────
     def get_document_stats(self) -> tuple[int, int]:
-        row = self._one("SELECT COUNT(*), COALESCE(SUM(char_length(full_text)), 0) FROM documents")
+        # full_text_len is stored so this does not have to detoast ~1.6 GB of
+        # transcript text on every startup.
+        row = self._one("SELECT COUNT(*), COALESCE(SUM(full_text_len), 0) FROM documents")
         return (row[0], row[1]) if row else (0, 0)
 
     def get_document_text(self, doc_id: int) -> str:

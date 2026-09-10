@@ -43,7 +43,7 @@
 |-------|-----------|
 | Language | Python 3 |
 | Web framework | Flask 2.x + Jinja2 templates |
-| Database | SQLite with FTS5 extension |
+| Database | SQLite with FTS5, or PostgreSQL with tsvector + GIN |
 | Search | FTS5 full-text indexing + Python `regex` post-filtering |
 | Auth | Google OAuth2 (flask-oauthlib) |
 | Analytics | PostHog (optional) |
@@ -200,6 +200,38 @@ Browser click  ──►  GET /audio/<doc_uuid>#t=<start>
 Audio requests support HTTP 206 Partial Content for efficient seeking. With the
 S3 backend the browser's `Range` header is passed straight through to S3, so a
 seek transfers only the bytes the player asked for.
+
+### Search Index Backends
+
+`app/services/index.py` (SQLite + FTS5) and `app/services/pg_index.py`
+(PostgreSQL + tsvector) expose the same read surface, chosen by
+`--index-backend {auto,sqlite,postgres}`. `auto` picks postgres when
+`DATABASE_URL` is set. The Postgres index is populated out of band by
+`scripts/migrate_sqlite_to_postgres.py`; the app never builds it at startup.
+
+Both backends use the same two-stage search: the full-text index narrows to
+candidate documents, then a `regex` pass over those documents' text finds the
+exact hit offsets. Only the second stage decides results, so the candidate
+filter must never exclude a real match — it may over-include, at the cost of a
+wasted scan.
+
+That constraint shapes exact (phrase) search on Postgres. tsvector positions
+are held in 14 bits, so a document long enough to pass position 16383 has
+every later word collapsed onto that position and cannot answer a phrase
+query at all — matches late in a long transcript are silently missed. Exact
+search therefore runs two branches:
+
+| Documents | Branch | Index |
+|-----------|--------|-------|
+| positions intact (~99%) | `phraseto_tsquery`, a true phrase match | `documents_tsv_gin` |
+| positions clamped (~1%) | tokens ANDed, position-free superset | `documents_tsv_overflow_gin` (partial) |
+
+The planner reads this as a `BitmapOr` of the two GIN scans. The
+`tsv_overflow` flag is measured after loading, from the highest position
+actually stored, rather than guessed from text length. Degrading the whole
+corpus to the AND filter instead would scan roughly 1.7x more documents on
+average and up to 6x for some phrases, which also thins out result pages,
+since pagination walks candidate documents.
 
 ### Audio Storage Backends
 

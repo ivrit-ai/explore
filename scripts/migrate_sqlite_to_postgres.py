@@ -14,7 +14,8 @@ Stages run in order and can be selected individually with --stage:
     schema     create tables (no indexes yet — they are built last)
     documents  copy the 34.5k documents, including full_text
     segments   copy the 33M segments, resumable in doc_id batches
-    indexes    build the GIN full-text index and the segment indexes
+    flags      mark documents whose tsvector positions Postgres clamped
+    indexes    build the GIN full-text indexes and the segment indexes
     verify     compare row counts and spot-check a document
 
 Indexes are deliberately created after the bulk load; building them up front
@@ -47,7 +48,14 @@ CREATE TABLE IF NOT EXISTS documents (
     episode_title TEXT,
     full_text     TEXT,
     full_text_tsv tsvector
-        GENERATED ALWAYS AS (to_tsvector('simple', coalesce(full_text, ''))) STORED
+        GENERATED ALWAYS AS (to_tsvector('simple', coalesce(full_text, ''))) STORED,
+    -- Summed for the startup stats query so it never detoasts full_text.
+    full_text_len INTEGER
+        GENERATED ALWAYS AS (char_length(coalesce(full_text, ''))) STORED,
+    -- True when this document is long enough that Postgres clamped its
+    -- tsvector positions, which makes phrase queries unusable on it. Set by
+    -- the 'indexes' stage, since it can only be measured after the load.
+    tsv_overflow  BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 CREATE TABLE IF NOT EXISTS segments (
@@ -67,9 +75,18 @@ CREATE TABLE IF NOT EXISTS migration_progress (
 );
 """
 
+# Positions past this are clamped by Postgres; keep in step with
+# app.services.pg_index.TSV_MAX_POSITION.
+TSV_MAX_POSITION = 16383
+
 INDEXES = [
     ("documents_tsv_gin",
      "CREATE INDEX IF NOT EXISTS documents_tsv_gin ON documents USING GIN (full_text_tsv)"),
+    # Exact search sends the position-free fallback query only at the handful
+    # of overflowed documents, so give that branch its own small index.
+    ("documents_tsv_overflow_gin",
+     "CREATE INDEX IF NOT EXISTS documents_tsv_overflow_gin ON documents "
+     "USING GIN (full_text_tsv) WHERE tsv_overflow"),
     ("documents_source_idx",
      "CREATE INDEX IF NOT EXISTS documents_source_idx ON documents (source)"),
     ("documents_date_idx",
@@ -204,6 +221,36 @@ def stage_segments(sq, conn) -> None:
     log.info("segments: done, %d rows in %.1fs", done, time.perf_counter() - t0)
 
 
+def stage_flags(sq, conn) -> None:
+    """Mark documents whose tsvector positions were clamped.
+
+    Postgres caps tsvector positions at 16383 and silently puts everything
+    beyond that on the last position, so adjacency stops working. Measuring the
+    highest position actually stored tells us exactly which documents cannot
+    answer a phrase query, rather than guessing from text length.
+    """
+    log.info("Flagging documents with clamped tsvector positions")
+    t0 = time.perf_counter()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE documents d SET tsv_overflow = sub.maxpos >= %s
+            FROM (
+                SELECT doc_id, COALESCE(MAX(p), 0) AS maxpos
+                FROM documents, unnest(full_text_tsv) t, unnest(t.positions) p
+                GROUP BY doc_id
+            ) sub
+            WHERE sub.doc_id = d.doc_id
+              AND d.tsv_overflow <> (sub.maxpos >= %s)
+            """,
+            [TSV_MAX_POSITION, TSV_MAX_POSITION],
+        )
+        cur.execute("SELECT COUNT(*) FILTER (WHERE tsv_overflow), COUNT(*) FROM documents")
+        overflowed, total = cur.fetchone()
+    log.info("  %d/%d documents overflowed (%.1f%%) in %.1fs",
+             overflowed, total, 100 * overflowed / max(total, 1), time.perf_counter() - t0)
+
+
 def stage_indexes(sq, conn) -> None:
     for name, sql in INDEXES:
         log.info("Building index %s", name)
@@ -241,11 +288,16 @@ def stage_verify(sq, conn) -> None:
         cur.execute("SELECT pg_size_pretty(pg_total_relation_size('documents')), "
                     "pg_size_pretty(pg_total_relation_size('segments'))")
         sizes = cur.fetchone()
+        cur.execute("SELECT COUNT(*) FILTER (WHERE tsv_overflow), COUNT(*) FROM documents")
+        overflowed, doc_total = cur.fetchone()
     log.info("full_text chars sqlite=%s postgres=%s  %s", f"{want_chars:,}", f"{got_chars:,}",
              "ok" if want_chars == got_chars else "MISMATCH")
     if want_chars != got_chars:
         ok = False
     log.info("documents with empty tsvector: %d", empty_tsv)
+    log.info("documents with clamped tsvector positions: %d/%d (%.1f%%) — these use the "
+             "position-free exact-search branch", overflowed, doc_total,
+             100 * overflowed / max(doc_total, 1))
     log.info("relation sizes: documents=%s segments=%s", sizes[0], sizes[1])
     log.info("VERIFY %s", "PASSED" if ok else "FAILED")
     return ok
@@ -255,10 +307,11 @@ STAGES = {
     "schema": stage_schema,
     "documents": stage_documents,
     "segments": stage_segments,
+    "flags": stage_flags,
     "indexes": stage_indexes,
     "verify": stage_verify,
 }
-ORDER = ["schema", "documents", "segments", "indexes", "verify"]
+ORDER = ["schema", "documents", "segments", "flags", "indexes", "verify"]
 
 
 def main() -> int:
