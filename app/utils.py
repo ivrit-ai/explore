@@ -1,6 +1,6 @@
 import os
 from urllib.parse import unquote
-from typing import Optional, List
+from typing import List
 from pathlib import Path
 from dataclasses import dataclass
 from typing import NamedTuple
@@ -50,31 +50,3 @@ def get_transcripts(root: Path) -> List[FileRecord]:
 
     recs.sort(key=lambda r: r.id)
     return recs
-
-
-def resolve_audio_path(source: str, audio_dir) -> Optional[str]:
-    """
-    Resolve the path to an audio file based on source.
-
-    Args:
-        source: The source identifier
-        audio_dir: Path to the audio directory
-
-    Returns:
-        The full path to the audio file if it exists, None otherwise.
-        Audio files are expected to be stored as: audio_dir/source/source.opus
-        Handles URL decoding if the file doesn't exist initially.
-    """
-    if not audio_dir:
-        return None
-
-    # Construct the direct path to the audio file based on source
-    # Audio files are stored as: audio_dir/source/episode.opus
-    source_parts = source.split('/')
-    audio_path = os.path.join(audio_dir, *source_parts)
-    
-    if not audio_path.endswith('.opus'):
-        audio_path += '.opus'
-    
-    # Return the path if file exists, None otherwise
-    return audio_path if os.path.exists(audio_path) else None 

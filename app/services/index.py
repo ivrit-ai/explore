@@ -249,13 +249,21 @@ class TranscriptIndex:
 
         return result
 
-    def get_search_metadata(self, fts_query: str, date_from: Optional[str] = None,
+    def get_search_metadata(self, query: str, search_mode: str = 'partial',
+                           date_from: Optional[str] = None,
                            date_to: Optional[str] = None,
                            sources: Optional[list[str]] = None) -> dict:
-        """Get aggregated metadata (source counts, date range) for an FTS5 query.
+        """Get aggregated metadata (source counts, date range) for a query.
+
+        Takes the user query and mode rather than a backend-specific match
+        expression, so callers stay independent of the storage engine.
 
         Returns dict with 'sources' (source -> count), 'date_range' (min/max), 'total_docs'.
         """
+        fts_query = self._build_fts_query(query, search_mode)
+        if fts_query is None:
+            return {"sources": {}, "date_range": {"min": None, "max": None}, "total_docs": 0}
+
         sql = """
             SELECT d.source, COUNT(*) as cnt,
                    MIN(d.episode_date) as min_date,

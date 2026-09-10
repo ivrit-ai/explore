@@ -201,27 +201,10 @@ def search_metadata(
     sources_param = sources.strip()
     sources_list = [s.strip() for s in sources_param.split(',') if s.strip()] if sources_param else None
 
-    import regex as re_mod
     index = search_service._index_mgr.get()
 
-    if search_mode == 'exact':
-        escaped = query.replace('"', '""')
-        fts_query = f'"{escaped}"'
-    elif search_mode == 'partial':
-        escaped = query.replace('"', '""')
-        tokens = escaped.split()
-        fts_query = ' OR '.join([f'{t}*' for t in tokens])
-    else:  # regex
-        potential_tokens = re_mod.findall(r'\w{2,}', query)
-        if potential_tokens:
-            fts_query = ' AND '.join([f'{t}*' for t in potential_tokens[:3]])
-        else:
-            fts_query = None
-
-    if fts_query:
-        metadata = index.get_search_metadata(fts_query, date_from_val, date_to_val, sources_list)
-    else:
-        metadata = {"sources": {}, "date_range": {"min": None, "max": None}, "total_docs": 0}
+    metadata = index.get_search_metadata(query, search_mode, date_from_val,
+                                         date_to_val, sources_list)
 
     return JSONResponse({
         "sources": metadata["sources"],

@@ -6,6 +6,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import RedirectResponse
 from starlette.templating import Jinja2Templates
 from .services.analytics_service import AnalyticsService
+from .services.audio_store import AudioStore, build_audio_store
 import os
 import logging
 
@@ -14,12 +15,27 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-def create_app(data_dir: str, index_file: str = None):
+def create_app(data_dir: str = None, index_file: str = None,
+               audio_store: AudioStore = None):
+    """Build the FastAPI app.
+
+    Args:
+        data_dir: Directory holding 'json/' and 'audio/'. Optional when audio
+            is served from S3 and the index is prebuilt.
+        index_file: Optional explicit index path.
+        audio_store: Audio backend. Defaults to one built from the environment
+            (see build_audio_store), falling back to data_dir/audio.
+    """
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        app.state.data_dir = Path(data_dir)
-        app.state.audio_dir = Path(data_dir) / "audio"
+        app.state.data_dir = Path(data_dir) if data_dir else None
         app.state.index_file = index_file
+
+        store = audio_store or build_audio_store(data_dir=data_dir)
+        app.state.audio_store = store
+        # Kept for backwards compatibility; only meaningful for local storage.
+        app.state.audio_dir = getattr(store, "audio_dir", None)
+        logging.getLogger(__name__).info(f"Audio backend: {store.describe()}")
 
         # Configure PostHog
         posthog_api_key = os.environ.get('POSTHOG_API_KEY', '')
@@ -69,31 +85,58 @@ def create_app(data_dir: str, index_file: str = None):
     return app
 
 
-def init_index_manager(app, **db_kwargs):
-    """Initialize the index manager from an existing database.
+def resolve_index_backend(backend: str = None) -> str:
+    """Pick the index backend: 'sqlite' or 'postgres'.
+
+    'auto' (the default) chooses postgres when a DATABASE_URL is present, which
+    is how managed hosts hand over their database, and sqlite otherwise.
+    """
+    backend = (backend or os.environ.get('EXPLORE_INDEX_BACKEND') or 'auto').lower()
+    if backend == 'auto':
+        backend = 'postgres' if os.environ.get('DATABASE_URL') else 'sqlite'
+    if backend not in ('sqlite', 'postgres'):
+        raise ValueError(f"Unknown index backend: {backend!r} (expected 'sqlite', "
+                         "'postgres' or 'auto')")
+    return backend
+
+
+def init_index_manager(app, backend: str = None, dsn: str = None, **db_kwargs):
+    """Initialize the index manager from an existing index.
 
     Args:
         app: FastAPI application instance
-        **db_kwargs: Database-specific connection parameters (e.g., path)
+        backend: 'sqlite', 'postgres', or 'auto' (see resolve_index_backend)
+        dsn: Postgres connection string; defaults to $DATABASE_URL
+        **db_kwargs: SQLite connection parameters (e.g., path)
     """
-    from .services.index import IndexManager
     from .services.search import SearchService
 
     log = logging.getLogger(__name__)
+    backend = resolve_index_backend(backend)
 
-    if not db_kwargs:
-        db_kwargs = {
-            "path": os.environ.get('SQLITE_PATH', 'explore.sqlite')
-        }
+    if backend == 'postgres':
+        from .services.pg_index import PostgresIndexManager
 
-    db_path = Path(db_kwargs.get('path', 'explore.sqlite'))
+        index_mgr = PostgresIndexManager(dsn=dsn)
+        log.info("Index backend: postgres")
+    else:
+        from .services.index import IndexManager
 
-    if not db_path.exists():
-        log.error(f"Database not found: {db_path}")
-        log.error("Please build the index first using: python -m app.cli build --data-dir <path>")
-        raise FileNotFoundError(f"Database not found: {db_path}")
+        if not db_kwargs:
+            db_kwargs = {
+                "path": os.environ.get('SQLITE_PATH', 'explore.sqlite')
+            }
 
-    index_mgr = IndexManager(index_path=db_path)
+        db_path = Path(db_kwargs.get('path', 'explore.sqlite'))
 
+        if not db_path.exists():
+            log.error(f"Database not found: {db_path}")
+            log.error("Please build the index first using: python -m app.cli build --data-dir <path>")
+            raise FileNotFoundError(f"Database not found: {db_path}")
+
+        index_mgr = IndexManager(index_path=db_path)
+        log.info(f"Index backend: sqlite ({db_path})")
+
+    app.state.index_backend = backend
     app.state.search_service = SearchService(index_mgr)
     return index_mgr

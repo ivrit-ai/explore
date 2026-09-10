@@ -43,8 +43,34 @@ You can run the web application in two modes:
    flask run
    ```
 
+## Audio Storage
+
+Episode audio is read either from a local `audio/` directory or from an S3
+bucket. The default (`auto`) picks S3 when a bucket is configured and the local
+directory otherwise, so existing local setups keep working untouched.
+
+```bash
+# Local audio directory (the historical behaviour)
+python run.py --data-dir /home/data/explore
+
+# S3, no local audio needed
+python run.py --audio-source s3 --s3-bucket explore-datastore
+```
+
+AWS credentials come from the standard boto3 chain: environment variables,
+`~/.aws/credentials`, or an instance role. They are never read from app config.
+
+The bucket mirrors the local layout, so `audio/<source>/<episode>.opus` on disk
+becomes `s3://<bucket>/<prefix>/<source>/<episode>.opus`.
+
 ## Environment Variables
 
+- `EXPLORE_AUDIO_SOURCE`: `auto` (default), `local` or `s3`
+- `EXPLORE_S3_BUCKET`: Bucket holding the audio tree
+- `EXPLORE_S3_PREFIX`: Key prefix within the bucket (default `audio`)
+- `EXPLORE_S3_REGION`: Bucket region (falls back to `AWS_REGION`/`AWS_DEFAULT_REGION`)
+- `EXPLORE_S3_ENDPOINT_URL`: Custom endpoint for S3-compatible storage (optional)
+- `EXPLORE_S3_PRESIGN_TTL`: Lifetime in seconds of presigned URLs handed to FFmpeg (default 3600)
 - `INDEX_FILE`: Path to a pre-generated index file (optional)
 - `FLASK_APP`: Set to "app" to run the Flask application
 - `FLASK_ENV`: Set to "development" for development mode
@@ -63,7 +89,7 @@ You can run the web application in two modes:
   - `cli.py`: Command line interface
 - `data/`: Data directory
   - `json/`: Transcript JSON files
-  - `audio/`: Audio files
+  - `audio/`: Audio files (optional when using the S3 backend)
 
 ## Project Structure
 

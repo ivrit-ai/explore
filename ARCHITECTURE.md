@@ -30,10 +30,11 @@
 │  └────────────────────────────────────────────────────┘  │
 └──────────────────────────────────────────────────────────┘
          │                              │
-   ┌─────▼──────┐              ┌───────▼────────┐
-   │ Audio files │              │ Transcript JSON │
-   │  (*.opus)   │              │  (*.json.gz)    │
-   └─────────────┘              └────────────────┘
+   ┌─────▼──────────┐          ┌───────▼────────┐
+   │  Audio files   │          │ Transcript JSON │
+   │   (*.opus)     │          │  (*.json.gz)    │
+   │ local dir │ S3 │          │                 │
+   └────────────────┘          └────────────────┘
 ```
 
 ## Tech Stack
@@ -48,6 +49,7 @@
 | Analytics | PostHog (optional) |
 | Frontend | Vanilla JS + CSS (no framework), RTL Hebrew |
 | Audio | HTML5 `<audio>` with HTTP range requests; FFmpeg for export |
+| Audio storage | Local directory or S3 bucket (`app/services/audio_store.py`, boto3) |
 | Production server | uWSGI with SSL (Let's Encrypt) |
 | Data parsing | orjson, pandas, duckdb |
 
@@ -57,7 +59,7 @@
 ├── app/
 │   ├── __init__.py              # Flask app factory (create_app, init_index_manager)
 │   ├── cli.py                   # CLI for building/inspecting the index
-│   ├── utils.py                 # FileRecord, transcript discovery, audio path resolution
+│   ├── utils.py                 # FileRecord, transcript discovery
 │   ├── routes/
 │   │   ├── main.py              # GET / (home), GET /search (results), GET /search/metadata
 │   │   ├── search.py            # JSON API: search hits, segment lookup
@@ -185,16 +187,40 @@ Browser click  ──►  GET /audio/<doc_uuid>#t=<start>
                           │
                           ▼
                    Resolve UUID → episode path
-                   Resolve audio file (.opus)
                           │
                           ▼
-                   send_file() with range support
+                   AudioStore.response()
+                    ├─ local: FileResponse (Starlette range support)
+                    └─ s3:    GetObject with the Range header forwarded
                           │
                           ▼
                    HTML5 <audio> seeks to start_time
 ```
 
-Audio requests support HTTP 206 Partial Content for efficient seeking.
+Audio requests support HTTP 206 Partial Content for efficient seeking. With the
+S3 backend the browser's `Range` header is passed straight through to S3, so a
+seek transfers only the bytes the player asked for.
+
+### Audio Storage Backends
+
+`app/services/audio_store.py` puts one interface in front of both layouts:
+
+| Method | Local | S3 |
+|--------|-------|-----|
+| `response()` | `FileResponse` | streamed `GetObject`, Range forwarded |
+| `ffmpeg_input()` | filesystem path | presigned URL (ffmpeg range-reads it) |
+| `local_copy()` | filesystem path | temp download, deleted on exit |
+
+The backend is chosen by `--audio-source {auto,local,s3}` (default `auto`: S3
+when a bucket is configured, otherwise the local `audio/` directory). Episode
+keys mirror the local layout, so `audio/<source>/<episode>.opus` on disk is
+`s3://<bucket>/<prefix>/<source>/<episode>.opus` in the bucket. Credentials use
+the standard boto3 chain (environment, `~/.aws`, instance role) and are never
+read from application config.
+
+Segment export runs FFmpeg against a presigned URL, which range-reads only the
+part it needs. If that FFmpeg build lacks HTTPS support the route retries once
+against a temporary local copy.
 
 ## API Endpoints
 

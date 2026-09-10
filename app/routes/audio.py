@@ -1,9 +1,6 @@
 from fastapi import APIRouter, Request, Depends, HTTPException
-from fastapi.responses import FileResponse
 from ..routes.auth import require_login
-from ..utils import resolve_audio_path
 import os
-import mimetypes
 import time
 import logging
 import uuid as uuid_module
@@ -45,30 +42,15 @@ def serve_audio_by_uuid(
 
         logger.debug(f"{tag} UUID resolved to episode: {episode_path}")
 
-        # Resolve audio path
-        audio_dir = request.app.state.audio_dir
-        audio_path = resolve_audio_path(episode_path, audio_dir)
-        if not audio_path:
-            logger.warning(f"{tag} Audio not found for episode: {episode_path}")
-            raise HTTPException(status_code=404, detail=f"Audio file not found for {episode_path}")
-
-        logger.debug(f"{tag} Serving audio file: {audio_path}")
-
-        # Validate file existence
-        if not os.path.exists(audio_path):
-            logger.warning(f"{tag} File not found: {audio_path}")
-            raise HTTPException(status_code=404, detail="File not found")
-
-        media_type = mimetypes.guess_type(audio_path)[0] or 'application/octet-stream'
+        # Hand off to the configured audio backend (local directory or S3).
+        # Both honour Range requests, so player seeking works either way.
+        store = request.app.state.audio_store
+        response = store.response(request, episode_path)
 
         duration_ms = (time.perf_counter() - start) * 1000
-        logger.info(f"{tag} Serving file in {duration_ms:.2f}ms")
+        logger.info(f"{tag} Serving {episode_path} from {store.describe()} in {duration_ms:.2f}ms")
 
-        # FileResponse handles Range requests natively via Starlette
-        return FileResponse(
-            audio_path,
-            media_type=media_type,
-        )
+        return response
 
     except IndexError:
         logger.warning(f"{tag} UUID not found: '{original}' → '{uuid_clean}'")

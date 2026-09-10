@@ -1,0 +1,11 @@
+.git
+.venv
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+app.log
+logs/
+__pycache__/
+*.pyc
+.claude/

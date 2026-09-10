@@ -1,18 +1,32 @@
 from fastapi import APIRouter, Request, Query, Depends, HTTPException
 from starlette.responses import StreamingResponse
 from ..routes.auth import require_login
-from ..utils import resolve_audio_path
 import io
 import csv
 import subprocess
 import logging
 import time
 import re
+import unicodedata
 from datetime import datetime
+from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+def _content_disposition(filename: str) -> str:
+    """Build a Content-Disposition value that survives non-ASCII filenames.
+
+    Header values are latin-1 encoded, so a Hebrew episode name raises on the
+    way out. Send an ASCII-folded name for old clients plus the RFC 5987
+    ``filename*`` form that carries the real UTF-8 name.
+    """
+    folded = unicodedata.normalize('NFKD', filename).encode('ascii', 'ignore').decode()
+    folded = re.sub(r'[^\w.\-]+', '_', folded).strip('_') or 'download'
+    return f"attachment; filename=\"{folded}\"; filename*=UTF-8''{quote(filename, safe='')}"
+
+
 
 # Context segment configuration for CSV exports
 DEFAULT_CONTEXT_SEGMENTS_LENGTH = 5
@@ -182,8 +196,25 @@ def export_results_csv(
     return StreamingResponse(
         io.BytesIO(csv_bytes),
         media_type='text/csv; charset=utf-8',
-        headers={'Content-Disposition': f'attachment; filename="{filename}"'},
+        headers={'Content-Disposition': _content_disposition(filename)},
     )
+
+
+def _transcode(audio_input: str, start: float, end: float):
+    """Run ffmpeg over a path or URL, returning (stdout, stderr, returncode)."""
+    cmd = [
+        'ffmpeg', '-y',
+        '-i', audio_input,
+        '-ss', str(start),
+        '-to', str(end),
+        '-acodec', 'libmp3lame',
+        '-ab', '64k',
+        '-f', 'mp3',
+        '-'
+    ]
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    output_data, error = process.communicate()
+    return output_data, error, process.returncode
 
 
 @router.get('/export/segment/{source}/{filename:path}', name='export.export_segment')
@@ -197,38 +228,30 @@ def export_segment(
     if end <= start:
         raise HTTPException(status_code=400, detail="End time must be greater than start time")
 
+    episode = f'{source}/{filename}'
+
     try:
-        logger.info(f"Exporting segment: {source}/{filename}")
-        audio_dir = request.app.state.audio_dir
-        audio_path = resolve_audio_path(f'{source}/{filename}.opus', audio_dir)
-        if not audio_path:
-            from fastapi import HTTPException
+        logger.info(f"Exporting segment: {episode}")
+        store = request.app.state.audio_store
+
+        try:
+            with store.ffmpeg_input(episode) as audio_input:
+                output_data, error, returncode = _transcode(audio_input, start, end)
+        except FileNotFoundError:
             raise HTTPException(status_code=404, detail="Source not found")
 
-        logger.info(f"Found audio file: {audio_path}")
+        if returncode != 0 and store.is_remote:
+            # A remote backend hands ffmpeg a URL, which needs an ffmpeg built
+            # with HTTPS support. Fall back to a local copy before giving up.
+            logger.warning(f"FFmpeg failed on primary input for {episode}: {error.decode(errors='replace')}")
+            try:
+                with store.local_copy(episode) as audio_path:
+                    output_data, error, returncode = _transcode(audio_path, start, end)
+            except FileNotFoundError:
+                raise HTTPException(status_code=404, detail="Source not found")
 
-        cmd = [
-            'ffmpeg', '-y',
-            '-i', audio_path,
-            '-ss', str(start),
-            '-to', str(end),
-            '-acodec', 'libmp3lame',
-            '-ab', '64k',
-            '-f', 'mp3',
-            '-'
-        ]
-
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        )
-
-        output_data, error = process.communicate()
-
-        if process.returncode != 0:
-            logger.error(f"FFmpeg error: {error.decode()}")
-            from fastapi import HTTPException
+        if returncode != 0:
+            logger.error(f"FFmpeg error: {error.decode(errors='replace')}")
             raise HTTPException(status_code=500, detail="Error processing audio")
 
         download_name = f'{source}_{filename}_{start:.2f}-{end:.2f}.mp3'
@@ -236,7 +259,7 @@ def export_segment(
         return StreamingResponse(
             io.BytesIO(output_data),
             media_type='audio/mpeg',
-            headers={'Content-Disposition': f'attachment; filename="{download_name}"'},
+            headers={'Content-Disposition': _content_disposition(download_name)},
         )
 
     except HTTPException:
