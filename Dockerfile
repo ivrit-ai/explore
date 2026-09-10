@@ -22,6 +22,13 @@ ENV PYTHONUNBUFFERED=1 \
     EXPLORE_AUDIO_SOURCE=s3 \
     EXPLORE_INDEX_BACKEND=postgres
 
+# TLS terminates at the platform's proxy, which forwards plain HTTP with
+# X-Forwarded-Proto. uvicorn only honours that header from a trusted source and
+# trusts just 127.0.0.1 by default, so without this every absolute URL the app
+# generates comes out http:// and the browser blocks it as mixed content.
+# Trust the private ranges the proxy lives in; override with FORWARDED_ALLOW_IPS.
+ENV FORWARDED_ALLOW_IPS="10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.1,::1"
+
 # $XHOST_HTTP_PORT is injected at container start, so expand it in a shell and
 # exec so uvicorn receives stop signals directly.
-CMD ["sh", "-c", "exec uvicorn wsgi:app --host 0.0.0.0 --port $XHOST_HTTP_PORT"]
+CMD ["sh", "-c", "exec uvicorn wsgi:app --host 0.0.0.0 --port $XHOST_HTTP_PORT --proxy-headers --forwarded-allow-ips \"$FORWARDED_ALLOW_IPS\""]

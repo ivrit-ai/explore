@@ -38,7 +38,7 @@ def render(request: Request, template_name: str, **context):
         # Static files: translate Flask's filename= to Starlette's path=
         if name == 'static':
             path = params.pop('filename', params.pop('path', ''))
-            return request.url_for('static', path=path)
+            return request.url_for('static', path=path).path
 
         # For named routes, separate path params from query params.
         # Starlette's url_for only accepts path params; extras become query string.
@@ -66,7 +66,10 @@ def render(request: Request, template_name: str, **context):
             else:
                 query_params[k] = v
 
-        url = str(request.url_for(name, **path_params))
+        # Root-relative, not absolute. Every route the templates link to is on
+        # this same origin, and a relative URL cannot inherit the wrong scheme
+        # from a reverse proxy the way an absolute one can.
+        url = request.url_for(name, **path_params).path
 
         if query_params:
             qs = urlencode(query_params)
