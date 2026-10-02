@@ -505,7 +505,11 @@ class PostgresIndexManager:
     def __init__(self, dsn: Optional[str] = None, min_size: int = 1, max_size: int = 4):
         from psycopg_pool import ConnectionPool
 
-        dsn = dsn or os.environ.get("DATABASE_URL")
+        # The pool sets statement_timeout as a startup option. A transaction
+        # pooler (xhostd's DATABASE_URL) refuses a startup parameter it does not
+        # track, so prefer DATABASE_URL_DIRECT, which reaches the server itself.
+        # Without a pooler it is unset or names the same server.
+        dsn = dsn or os.environ.get("DATABASE_URL_DIRECT") or os.environ.get("DATABASE_URL")
         if not dsn:
             raise ValueError("Postgres index requires a DSN (DATABASE_URL)")
         self._pool = ConnectionPool(
