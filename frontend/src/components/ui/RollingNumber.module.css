@@ -1,0 +1,27 @@
+.number {
+  display: inline-flex;
+  font-variant-numeric: tabular-nums;
+}
+
+.digits {
+  display: inline-flex;
+  direction: ltr;
+}
+
+.window {
+  display: inline-block;
+  height: 1em;
+  line-height: 1;
+  overflow: hidden;
+}
+
+.strip {
+  display: flex;
+  flex-direction: column;
+  transition: transform 200ms var(--ease-out);
+}
+
+.strip > span {
+  height: 1em;
+  line-height: 1;
+}

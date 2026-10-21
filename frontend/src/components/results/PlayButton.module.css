@@ -1,0 +1,85 @@
+.button {
+  position: relative;
+  flex: none;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: none;
+  border-radius: var(--r-pill);
+  background: transparent;
+  cursor: pointer;
+  transition: transform 150ms var(--ease-out);
+}
+
+.button:active {
+  transform: scale(0.94);
+}
+
+.button:focus-visible {
+  outline: 2px solid var(--tx);
+  outline-offset: 2px;
+}
+
+.ring {
+  position: absolute;
+  inset: 0;
+  transform: rotate(-90deg);
+}
+
+.track,
+.progress {
+  fill: none;
+  stroke-width: 2;
+}
+
+.track {
+  stroke: var(--line-2);
+}
+
+.progress {
+  stroke: var(--accent);
+  stroke-linecap: round;
+  transition: stroke-dasharray 220ms var(--ease-out);
+}
+
+.disc {
+  position: absolute;
+  inset: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-pill);
+  background: #232120;
+  color: var(--tx);
+  transition: background-color 150ms var(--ease-out);
+}
+
+.button:hover .disc {
+  background: var(--s3);
+}
+
+.active,
+.button:hover .active {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+/* The triangle's visual centre sits left of its box. */
+.play {
+  margin-inline-end: -2px;
+}
+
+.spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: var(--r-pill);
+  border: 2px solid rgba(7, 22, 36, 0.3);
+  border-top-color: var(--accent-ink);
+  animation: spin 800ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

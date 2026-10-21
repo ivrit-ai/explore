@@ -1,0 +1,68 @@
+.lines {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--line);
+}
+
+.line {
+  width: 100%;
+  display: flex;
+  gap: 12px;
+  padding: 10px 8px;
+  border: none;
+  border-bottom: 1px solid var(--line-soft);
+  background: transparent;
+  color: var(--tx-3);
+  text-align: start;
+  font-size: 15px;
+  line-height: 1.7;
+  cursor: pointer;
+  transition: background-color 150ms var(--ease-out);
+}
+
+.line:hover {
+  background: var(--s2);
+  color: var(--tx-2);
+}
+
+.hit {
+  color: var(--tx);
+}
+
+.live {
+  background: var(--s2);
+  color: var(--tx);
+}
+
+.time {
+  flex: none;
+  width: 48px;
+  padding-top: 3px;
+  font-size: 12px;
+  color: var(--tx-3);
+}
+
+.live .time {
+  color: var(--accent);
+}
+
+.text {
+  flex: 1;
+}
+
+.large .line {
+  font-size: 17px;
+}
+
+.large .live {
+  font-size: 20px;
+  font-weight: 500;
+}
+
+.status {
+  margin: 0;
+  padding: 12px 8px;
+  color: var(--tx-3);
+  font-size: 14px;
+}

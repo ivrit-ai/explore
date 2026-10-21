@@ -1,17 +1,40 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import RedirectResponse
-from starlette.templating import Jinja2Templates
 from .services.analytics_service import AnalyticsService
+from .spa import DIST_DIR
 import os
 import logging
 
 from dotenv import load_dotenv
 
 load_dotenv()
+
+SESSION_MAX_AGE_S = 14 * 24 * 3600
+
+# The app only loads its own bundle, fonts and audio.
+CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
+    "font-src 'self'; media-src 'self'; connect-src 'self'; object-src 'none'; "
+    "base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
+)
+
+
+def is_dev() -> bool:
+    return os.environ.get('APP_ENV') == 'development'
+
+
+def _secret_key() -> str:
+    secret_key = os.environ.get('SECRET_KEY')
+    if secret_key:
+        return secret_key
+    if is_dev():
+        return 'dev-secret-key'
+    # A guessable key would let anyone forge a logged-in session cookie.
+    raise RuntimeError("SECRET_KEY must be set outside development (APP_ENV=development)")
 
 
 def create_app(data_dir: str, index_file: str = None):
@@ -34,36 +57,53 @@ def create_app(data_dir: str, index_file: str = None):
 
         app.state.mime_types = {'opus': 'audio/opus'}
 
-        templates_dir = Path(__file__).parent / "templates"
-        app.state.templates = Jinja2Templates(directory=str(templates_dir))
-
         yield
 
-    app = FastAPI(lifespan=lifespan)
+    app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 
-    secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key')
-    app.add_middleware(SessionMiddleware, secret_key=secret_key)
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=_secret_key(),
+        max_age=SESSION_MAX_AGE_S,
+        same_site='lax',
+        https_only=not is_dev(),
+    )
 
-    static_dir = Path(__file__).parent / "static"
-    app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next):
+        response = await call_next(request)
+        response.headers.setdefault('X-Content-Type-Options', 'nosniff')
+        response.headers.setdefault('Referrer-Policy', 'same-origin')
+        response.headers.setdefault('X-Frame-Options', 'DENY')
+        response.headers.setdefault('Content-Security-Policy', CONTENT_SECURITY_POLICY)
+        if request.url.path.startswith('/assets/'):
+            # Vite fingerprints these file names, so they never change in place.
+            response.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
+        return response
+
+    # Built frontend: hashed bundles under /assets, logo/favicon under /static.
+    app.mount("/assets", StaticFiles(directory=str(DIST_DIR / "assets"), check_dir=False), name="assets")
+    app.mount("/static", StaticFiles(directory=str(DIST_DIR / "static"), check_dir=False), name="static")
 
     # Import and register routers
-    from .routes import auth, main, search, export, audio
+    from .routes import api, auth, audio, export, pages
 
     # Initialize Google OAuth in production
-    if os.environ.get('APP_ENV') != 'development':
+    if not is_dev():
         auth.init_oauth(app)
 
     app.include_router(auth.router)
-    app.include_router(main.router)
-    app.include_router(search.router, prefix="/search")
+    app.include_router(pages.router)
+    app.include_router(api.router)
     app.include_router(export.router)
     app.include_router(audio.router)
 
     # Exception handler for login required
     @app.exception_handler(auth.LoginRequired)
     async def handle_login_required(request, exc):
-        request.session['next_url'] = str(request.url)
+        # Path only, so the post-login redirect can't point at another host.
+        next_url = request.url.path + (f"?{request.url.query}" if request.url.query else "")
+        request.session['next_url'] = next_url
         return RedirectResponse(url="/login", status_code=302)
 
     return app

@@ -1,7 +1,7 @@
-from fastapi import APIRouter, Request, Depends
+from fastapi import APIRouter, HTTPException, Request
 from starlette.responses import RedirectResponse
 from authlib.integrations.starlette_client import OAuth
-from ..templating import render
+from ..spa import spa_index
 import os
 
 router = APIRouter()
@@ -28,6 +28,14 @@ def require_login(request: Request) -> str:
     return request.session['user_email']
 
 
+def require_api_login(request: Request) -> str:
+    """Like require_login, but answers 401 JSON instead of redirecting (for /api)."""
+    try:
+        return require_login(request)
+    except LoginRequired:
+        raise HTTPException(status_code=401, detail="login required")
+
+
 def init_oauth(app):
     """Initialize OAuth with the FastAPI app (called in production only)."""
     oauth.register(
@@ -46,15 +54,13 @@ def login(request: Request):
     if analytics:
         analytics.capture_event('page_viewed', {'page': 'login'})
 
-    google_analytics_tag = os.environ.get("GOOGLE_ANALYTICS_TAG", "")
-
-    return render(request, "login.html", google_analytics_tag=google_analytics_tag)
+    return spa_index()
 
 
 @router.get("/authorize", name="auth.authorize")
 async def authorize(request: Request):
     if 'next_url' not in request.session:
-        request.session['next_url'] = str(request.url_for('main.home'))
+        request.session['next_url'] = '/'
 
     google = oauth.create_client('google')
     redirect_uri = str(request.url_for('auth.authorized'))
@@ -75,7 +81,7 @@ async def authorized(request: Request):
         if analytics:
             analytics.capture_event('login_failed', {'reason': error_message})
 
-        return RedirectResponse(url=str(request.url_for('auth.login')))
+        return RedirectResponse(url='/login')
 
     # Get user info from the ID token
     user_info = token.get('userinfo')
@@ -90,7 +96,7 @@ async def authorized(request: Request):
     if analytics:
         analytics.capture_event('login_successful', {'email': request.session['user_email']})
 
-    next_url = request.session.pop('next_url', str(request.url_for('main.home')))
+    next_url = request.session.pop('next_url', '/')
 
     return RedirectResponse(url=next_url)
 
@@ -103,4 +109,4 @@ def logout(request: Request):
 
     request.session.pop('user_email', None)
 
-    return RedirectResponse(url=str(request.url_for('main.home')))
+    return RedirectResponse(url='/')

@@ -28,50 +28,53 @@ The application provides a CLI for managing index files:
 
 ### Running the Web Application
 
-You can run the web application in two modes:
+The backend is FastAPI; the UI is a React app in `frontend/` (Node 20+).
 
-1. Building index on-the-fly (default):
+1. Backend, in dev mode (no Google login, listens on :5000):
    ```bash
-   export FLASK_APP=app
-   flask run
+   python run.py --data-dir data --dev
    ```
 
-2. Using a pre-generated index file:
+2. Frontend with hot reload on http://localhost:5173 (proxies the API to :5000):
    ```bash
-   export FLASK_APP=app
-   export INDEX_FILE=/path/to/explore-index.json.gz
-   flask run
+   cd frontend && npm install && npm run dev
    ```
+
+   Or build once (`npm run build`) and open http://localhost:5000 — FastAPI serves `frontend/dist`.
+
+3. Tests:
+   ```bash
+   pip install -r requirements-dev.txt && pytest
+   cd frontend && npm test
+   ```
+
+Production settings go in `.env` (see `.env.example`); deploy with `./deploy.sh`.
 
 ## Environment Variables
 
-- `INDEX_FILE`: Path to a pre-generated index file (optional)
-- `FLASK_APP`: Set to "app" to run the Flask application
-- `FLASK_ENV`: Set to "development" for development mode
-- `SECRET_KEY`: Secret key for Flask sessions
+See `.env.example` for the full list. The important ones:
+
+- `APP_ENV`: `development` skips Google login; anything else is production
+- `SECRET_KEY`: Session signing key (required in production)
+- `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`: Google OAuth credentials
+- `SQLITE_PATH`: Path to the SQLite index (default `explore.sqlite`)
 - `POSTHOG_API_KEY`: PostHog API key for analytics (optional)
 - `POSTHOG_HOST`: PostHog host URL (optional)
 - `DISABLE_ANALYTICS`: Set to "true" to disable analytics
 
 ## Directory Structure
 
-- `app/`: Main application package
+- `app/`: FastAPI application
   - `services/`: Core services including index management
-  - `routes/`: Web application routes
-  - `templates/`: HTML templates
-  - `static/`: Static files
+  - `routes/`: Page, JSON API, audio, export and auth routes
   - `cli.py`: Command line interface
+- `frontend/`: React + TypeScript UI (Vite)
+- `tests/`: Backend tests
 - `data/`: Data directory
   - `json/`: Transcript JSON files
   - `audio/`: Audio files
 
-## Project Structure
-
-- `app/` - Main application code
-  - `routes/` - Flask route definitions
-  - `services/` - Business logic and data services
-  - `static/` - CSS, JavaScript, and images
-  - `templates/` - HTML templates
+See `ARCHITECTURE.md` for details.
 
 ## Data Format
 

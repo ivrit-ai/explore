@@ -1,0 +1,51 @@
+.icon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: var(--r-md);
+  border: 1px solid var(--line);
+  background: var(--s1);
+  color: var(--tx);
+  cursor: pointer;
+  text-decoration: none;
+  transition:
+    transform 150ms var(--ease-out),
+    background-color 150ms var(--ease-out);
+}
+
+.md {
+  width: 44px;
+  height: 44px;
+}
+
+/* 36px visual, 44px hit area */
+.sm {
+  position: relative;
+  width: 36px;
+  height: 36px;
+}
+
+.sm::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+}
+
+.icon:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--tx);
+}
+
+.icon:active:not(:disabled) {
+  transform: scale(0.94);
+  background: var(--press);
+}
+
+.icon:disabled {
+  color: var(--tx-off);
+  background: transparent;
+  border-color: var(--line-soft);
+  cursor: not-allowed;
+}
