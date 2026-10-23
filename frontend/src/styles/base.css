@@ -24,7 +24,7 @@ a {
 }
 
 a:hover {
-  color: #fff;
+  color: var(--tx-strong);
 }
 
 button,

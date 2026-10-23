@@ -1,4 +1,33 @@
+/*
+ * Every colour in the app lives here. `public/static/theme-init.js` sets
+ * data-theme on <html> before first paint (the saved choice, else the OS
+ * setting), so only the two palettes below are needed.
+ */
 :root {
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-pill: 999px;
+
+  --font-ui: 'IBM Plex Sans Hebrew', system-ui, sans-serif;
+  --font-serif: 'Frank Ruhl Libre', 'IBM Plex Sans Hebrew', serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* On accent-filled controls: the same in both themes */
+  --accent-ink: #071624;
+  --spinner-track: rgba(7, 22, 36, 0.3);
+  --btn-sheen: rgba(255, 255, 255, 0.45);
+  --btn-sheen-pressed: rgba(255, 255, 255, 0.2);
+  --btn-edge: rgba(0, 0, 0, 0.12);
+
+  --content-max: 1240px;
+  --player-h: 0px;
+}
+
+:root,
+:root[data-theme='dark'] {
   color-scheme: dark;
 
   /* Surfaces: warm off-black, separated by hairlines and small tonal steps */
@@ -6,10 +35,14 @@
   --s1: #191816;
   --s2: #201e1b;
   --s3: #2e2b27;
+  --disc: #232120;
   --hover: #24221f;
   --press: #2d2a26;
+  --row-hover: #1f1d1a;
+  --row-press: #262420;
   --line: #2b2925;
   --line-2: #3a3732;
+  --line-3: #757066;
   --line-soft: #24221f;
 
   /* Text */
@@ -17,13 +50,17 @@
   --tx-2: #b8b1a7;
   --tx-3: #8e877d;
   --tx-off: #6e685f;
+  --tx-strong: #ffffff;
+  --code-ink: #d9d4cc;
 
   /* The one accent: primary action, live playhead, search matches */
   --accent: #8ccbf7;
   --accent-hi: #a1d4f8;
-  --accent-ink: #071624;
+  --accent-text: #8ccbf7;
   --accent-tint: rgba(140, 203, 247, 0.16);
   --accent-glow: rgba(140, 203, 247, 0.7);
+  --accent-clip: rgba(140, 203, 247, 0.3);
+  --accent-halo: rgba(140, 203, 247, 0.2);
   --match-ink: #ddf0ff;
 
   /* Regex capture groups: muted tints, always paired with a group number */
@@ -41,18 +78,84 @@
   --g4-ink: #dad5f0;
 
   --danger: #e86c50;
+  --danger-ink: #f6cdbf;
 
-  --r-sm: 6px;
-  --r-md: 10px;
-  --r-pill: 999px;
+  /* Controls */
+  --switch-on: #cfc8bd;
+  --dial-face: #2b2926;
+  --dial-rim: #1c1a18;
+  --dial-tick: #4a453e;
+  --dial-gap: #1a1917;
 
-  --font-ui: 'IBM Plex Sans Hebrew', system-ui, sans-serif;
-  --font-serif: 'Frank Ruhl Libre', 'IBM Plex Sans Hebrew', serif;
-  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+  /* Depth */
+  --scrim: rgba(8, 7, 6, 0.72);
+  --shadow: rgba(0, 0, 0, 0.9);
+  --shadow-soft: rgba(0, 0, 0, 0.6);
+  --sheen: rgba(255, 255, 255, 0.06);
+  --focus-soft: rgba(238, 234, 228, 0.08);
+}
 
-  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
-  --spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+:root[data-theme='light'] {
+  color-scheme: light;
 
-  --content-max: 1240px;
-  --player-h: 0px;
+  /* Surfaces: warm paper, the same tonal-step structure as dark */
+  --bg: #faf8f4;
+  --s1: #ffffff;
+  --s2: #f3f0ea;
+  --s3: #e7e2d9;
+  --disc: #ece8e1;
+  --hover: #efebe4;
+  --press: #e6e1d8;
+  --row-hover: #f3efe9;
+  --row-press: #e9e4db;
+  --line: #e4dfd6;
+  --line-2: #d3ccc0;
+  --line-3: #8e877b;
+  --line-soft: #eeeae3;
+
+  /* Text (contrast on --bg: tx 16:1, tx-2 8:1, tx-3 5:1) */
+  --tx: #1b1915;
+  --tx-2: #4f4a42;
+  --tx-3: #6b645a;
+  --tx-off: #a39b8f;
+  --tx-strong: #000000;
+  --code-ink: #2a2620;
+
+  /* A deeper blue: the dark theme's light blue is too faint on paper */
+  --accent: #3690d4;
+  --accent-hi: #62b0ea;
+  --accent-text: #1e6fb0;
+  --accent-tint: rgba(59, 151, 219, 0.14);
+  --accent-glow: rgba(59, 151, 219, 0.45);
+  --accent-clip: rgba(59, 151, 219, 0.25);
+  --accent-halo: rgba(59, 151, 219, 0.2);
+  --match-ink: #0b3a63;
+
+  --g1-bg: rgba(208, 87, 59, 0.14);
+  --g1-line: #d0573b;
+  --g1-ink: #8a2e17;
+  --g2-bg: rgba(176, 138, 62, 0.16);
+  --g2-line: #b08a3e;
+  --g2-ink: #6b4d12;
+  --g3-bg: rgba(94, 144, 112, 0.16);
+  --g3-line: #5e9070;
+  --g3-ink: #2e5b3c;
+  --g4-bg: rgba(123, 112, 184, 0.16);
+  --g4-line: #7b70b8;
+  --g4-ink: #463c86;
+
+  --danger: #c2412a;
+  --danger-ink: #9f2e19;
+
+  --switch-on: #1b1915;
+  --dial-face: #ffffff;
+  --dial-rim: #f1ede6;
+  --dial-tick: #bdb5a8;
+  --dial-gap: #f4f1ec;
+
+  --scrim: rgba(30, 26, 20, 0.35);
+  --shadow: rgba(60, 50, 35, 0.25);
+  --shadow-soft: rgba(60, 50, 35, 0.15);
+  --sheen: rgba(255, 255, 255, 0.7);
+  --focus-soft: rgba(27, 25, 21, 0.08);
 }
