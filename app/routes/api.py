@@ -19,6 +19,11 @@ router = APIRouter(prefix="/api", dependencies=[Depends(require_api_login)])
 
 MAX_PER_PAGE = 500
 MAX_CONTEXT_RADIUS = 10
+# A common partial term can match tens of thousands of times within one page of
+# episodes; sending (and rendering) all of them froze the browser. Each episode
+# carries its first hits plus the true count, and the client pages the rest in.
+DEFAULT_HITS_PER_EPISODE = 20
+MAX_HITS_PER_EPISODE = 500
 
 
 class Span(BaseModel):
@@ -44,6 +49,8 @@ class Episode(BaseModel):
     title: str
     date: Optional[str]
     duration_sec: float
+    total_hits: int
+    hit_offset: int
     hits: list[Hit]
 
 
@@ -117,6 +124,9 @@ def search(
     per_page: int = Query(50, ge=1, le=MAX_PER_PAGE),
     shuffle: bool = Query(True),
     seed: Optional[int] = Query(None, ge=0, le=2**31 - 1),
+    max_hits_per_episode: int = Query(DEFAULT_HITS_PER_EPISODE, ge=1, le=MAX_HITS_PER_EPISODE),
+    episode: Optional[int] = Query(None, ge=0, description="Return only this episode (for paging its hits)"),
+    hit_offset: int = Query(0, ge=0),
     user_email: str = Depends(require_api_login),
 ):
     started = time.time()
@@ -133,14 +143,26 @@ def search(
         doc_limit=per_page, doc_offset=(page - 1) * per_page, seed=seed,
     ))
 
+    # Group in result order, then keep only the requested slice of each episode
+    # so segment lookups and the response scale with what is shown.
+    by_episode: dict[int, list] = {}
+    for h in hits:
+        by_episode.setdefault(h.episode_idx, []).append(h)
+    total_hits = len(hits)
+    if episode is not None:
+        by_episode = {episode: by_episode[episode]} if episode in by_episode else {}
+    offsets = {idx: hit_offset if episode is not None else 0 for idx in by_episode}
+    kept = [h for idx, ep_hits in by_episode.items()
+            for h in ep_hits[offsets[idx]:offsets[idx] + max_hits_per_episode]]
+
     index = search_service._index_mgr.get()
-    segments = index.get_segments_at_offsets([(h.episode_idx, h.char_offset) for h in hits])
-    doc_ids = list({h.episode_idx for h in hits})
+    segments = index.get_segments_at_offsets([(h.episode_idx, h.char_offset) for h in kept])
+    doc_ids = list(by_episode)
     docs = index.get_documents_batch(doc_ids)
     durations = index.get_durations(doc_ids)
 
     episodes: dict[int, Episode] = {}
-    for h in hits:
+    for h in kept:
         seg = segments.get((h.episode_idx, h.char_offset))
         doc = docs.get(h.episode_idx)
         if not seg or not doc:
@@ -156,6 +178,8 @@ def search(
                 title=doc["episode_title"] or doc["episode"] or "",
                 date=str(doc["episode_date"]) if doc["episode_date"] else None,
                 duration_sec=durations.get(h.episode_idx, 0.0),
+                total_hits=len(by_episode[h.episode_idx]),
+                hit_offset=offsets[h.episode_idx],
                 hits=[],
             )
         episode.hits.append(Hit(
@@ -168,7 +192,6 @@ def search(
             groups=[_relative_span(s, e, offset, len(text)) for s, e in h.groups],
         ))
 
-    total_hits = sum(len(e.hits) for e in episodes.values())
     analytics = request.app.state.analytics
     if analytics:
         analytics.capture_search(

@@ -50,6 +50,20 @@ export function search(state: SearchState, signal?: AbortSignal) {
   return getJSON<SearchResponse>('/api/search', p, signal);
 }
 
+/** The next hits of one episode on the current results page. */
+export async function episodeHits(state: SearchState, episodeIdx: number, offset: number, limit: number) {
+  const p = filterParams(state);
+  p.set('page', String(state.page));
+  p.set('per_page', String(state.perPage));
+  p.set('shuffle', String(state.shuffle));
+  if (state.seed !== null) p.set('seed', String(state.seed));
+  p.set('episode', String(episodeIdx));
+  p.set('hit_offset', String(offset));
+  p.set('max_hits_per_episode', String(limit));
+  const res = await getJSON<SearchResponse>('/api/search', p);
+  return res.episodes[0]?.hits ?? [];
+}
+
 export function searchMetadata(state: SearchState, signal?: AbortSignal) {
   // Source counts ignore the source filter itself so every source stays listed.
   return getJSON<MetadataResponse>('/api/search/metadata', filterParams({ ...state, sources: [] }), signal);

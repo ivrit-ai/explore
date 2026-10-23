@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { csvExportUrl, search } from '../api/client';
-import type { Episode, SearchMode } from '../api/types';
+import { csvExportUrl, episodeHits, search } from '../api/client';
+import type { Episode, Hit, SearchMode } from '../api/types';
 import { FilterPanel, type FilterValues } from '../components/filters/FilterPanel';
 import { DownloadIcon, FilterIcon, ShuffleIcon } from '../components/icons';
 import { AppHeader } from '../components/layout/AppHeader';
@@ -15,6 +15,7 @@ import { BottomSheet } from '../components/ui/BottomSheet';
 import { Button, ButtonLink } from '../components/ui/Button';
 import { useAsync } from '../hooks/useAsync';
 import { useIsMobile } from '../hooks/useMediaQuery';
+import { HITS_PAGE, initialClosed, remainingHits, withExtraHits } from '../lib/hitPaging';
 import { groupCombos, hitComboKey, hitWord, wordForms } from '../lib/insights';
 import { newSearch, readSearchState, toSearchParams, type SearchState } from '../lib/searchState';
 import { usePlayer } from '../player/PlayerProvider';
@@ -34,6 +35,9 @@ export function ResultsPage() {
   const [draft, setDraft] = useState<SearchDraft>(state);
   const [closed, setClosed] = useState<Set<number>>(new Set());
   const [focus, setFocus] = useState<string | null>(null);
+  // Hits fetched with "show more", keyed by episode; reset with each search.
+  const [extra, setExtra] = useState<Map<number, Hit[]>>(new Map());
+  const [loadingMore, setLoadingMore] = useState<Set<number>>(new Set());
   const [filtersOpen, setFiltersOpen] = useState(false);
 
   // Shuffled results need a fixed seed so paging and reloads keep the order.
@@ -53,16 +57,42 @@ export function ResultsPage() {
 
   useEffect(() => {
     setClosed(new Set());
+    setExtra(new Map());
+    setLoadingMore(new Set());
     setFocus(null);
     window.scrollTo({ top: 0 });
   }, [key]);
 
   const { data, error, loading, reload } = useAsync(key ? (signal) => search(state, signal) : null, key);
 
+  useEffect(() => {
+    if (data) setClosed(initialClosed(data.episodes));
+  }, [data]);
+
+  const episodes = useMemo(() => withExtraHits(data?.episodes ?? [], extra), [data, extra]);
+  const loaded = useMemo(() => new Map(episodes.map((e) => [e.episode_idx, e])), [episodes]);
+
   const { setQueue } = player;
   useEffect(() => {
-    if (data) setQueue(data.episodes.flatMap((episode) => episode.hits.map((hit) => ({ episode, hit }))));
-  }, [data, setQueue]);
+    setQueue(episodes.flatMap((episode) => episode.hits.map((hit) => ({ episode, hit }))));
+  }, [episodes, setQueue]);
+
+  const loadMore = async (episode: Episode) => {
+    const idx = episode.episode_idx;
+    setLoadingMore((prev) => new Set(prev).add(idx));
+    try {
+      const more = await episodeHits(state, idx, episode.hits.length, HITS_PAGE);
+      setExtra((prev) => new Map(prev).set(idx, [...(prev.get(idx) ?? []), ...more]));
+    } catch {
+      // Leave the button in place so the user can retry.
+    } finally {
+      setLoadingMore((prev) => {
+        const next = new Set(prev);
+        next.delete(idx);
+        return next;
+      });
+    }
+  };
 
   // Jumping to a match in a collapsed episode opens it.
   const playingEpisode = player.current?.episode.episode_idx;
@@ -83,7 +113,6 @@ export function ResultsPage() {
     go({ ...state, ...f, page: 1, seed: null });
   };
 
-  const episodes = data?.episodes ?? [];
   const forms = state.mode === 'partial' ? wordForms(episodes) : [];
   const combos = state.mode === 'regex' && episodes.some((e) => e.hits.some((h) => h.groups.length)) ? groupCombos(episodes) : [];
   const keyOfHit = state.mode === 'partial' ? hitWord : hitComboKey;
@@ -182,6 +211,10 @@ export function ResultsPage() {
                   hits={episode.hits}
                   mode={state.mode}
                   open={!closed.has(episode.episode_idx)}
+                  total={focus ? undefined : episode.total_hits}
+                  remaining={remainingHits(loaded.get(episode.episode_idx) ?? episode)}
+                  loadingMore={loadingMore.has(episode.episode_idx)}
+                  onLoadMore={() => loadMore(loaded.get(episode.episode_idx) ?? episode)}
                   onToggle={() =>
                     setClosed((prev) => {
                       const next = new Set(prev);

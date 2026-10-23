@@ -115,3 +115,20 @@
     padding-inline-start: 0;
   }
 }
+
+.more {
+  margin-top: 12px;
+  min-height: 44px;
+  padding: 0 16px;
+  font: inherit;
+  color: var(--tx-2);
+  background: transparent;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  cursor: pointer;
+}
+
+.more:disabled {
+  opacity: 0.6;
+  cursor: default;
+}

@@ -4,7 +4,8 @@ import { patternPieces } from './regexPattern';
 import { groupCombos, wordForms } from './insights';
 import { readSearchState, toSearchParams } from './searchState';
 import { formatDate, formatTime } from './format';
-import type { Episode } from '../api/types';
+import { RENDER_BUDGET, OPEN_WHEN_OVER_BUDGET, initialClosed, remainingHits, withExtraHits } from './hitPaging';
+import type { Episode, Hit } from '../api/types';
 
 describe('buildPieces', () => {
   it('highlights the exact match', () => {
@@ -77,6 +78,8 @@ const episodes: Episode[] = [
     title: 't',
     date: null,
     duration_sec: 60,
+    total_hits: 3,
+    hit_offset: 0,
     hits: [
       { char_offset: 0, segment_idx: 0, start_sec: 0, end_sec: 1, text: 'שלום חברים', match: { start: 0, end: 10 }, groups: [{ start: 0, end: 4 }, { start: 5, end: 10 }] },
       { char_offset: 0, segment_idx: 1, start_sec: 0, end_sec: 1, text: 'שלום חברים', match: { start: 0, end: 10 }, groups: [{ start: 0, end: 4 }, { start: 5, end: 10 }] },
@@ -118,5 +121,34 @@ describe('format', () => {
     expect(formatTime(83.4)).toBe('01:23');
     expect(formatTime(3725)).toBe('1:02:05');
     expect(formatDate('2020-06-08')).toBe('08.06.2020');
+  });
+});
+
+const hit = (offset: number): Hit => ({
+  char_offset: offset, segment_idx: offset, start_sec: 0, end_sec: 1, text: 'ל', match: { start: 0, end: 1 }, groups: [],
+});
+const ep = (idx: number, loaded: number, total = loaded): Episode => ({
+  episode_idx: idx, uuid: `u${idx}`, source: 's', title: 't', date: null, duration_sec: 60,
+  total_hits: total, hit_offset: 0, hits: Array.from({ length: loaded }, (_, i) => hit(i)),
+});
+
+describe('hit paging', () => {
+  it('keeps every episode open on a small page', () => {
+    expect(initialClosed([ep(1, 5), ep(2, 5)]).size).toBe(0);
+  });
+
+  it('collapses all but the first episodes when a broad query would render too many rows', () => {
+    // 50 episodes x 20 hits: the shape of a one-letter partial search that froze the page.
+    const page = Array.from({ length: 50 }, (_, i) => ep(i, 20, 1600));
+    const closed = initialClosed(page);
+    expect(closed.size).toBe(50 - OPEN_WHEN_OVER_BUDGET);
+    const openRows = page.filter((e) => !closed.has(e.episode_idx)).reduce((n, e) => n + e.hits.length, 0);
+    expect(openRows).toBeLessThanOrEqual(RENDER_BUDGET);
+  });
+
+  it('appends loaded hits without duplicates and tracks what is left', () => {
+    const [merged] = withExtraHits([ep(7, 2, 5)], new Map([[7, [hit(1), hit(2), hit(3)]]]));
+    expect(merged.hits.map((h) => h.char_offset)).toEqual([0, 1, 2, 3]);
+    expect(remainingHits(merged)).toBe(1);
   });
 });

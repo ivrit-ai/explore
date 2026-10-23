@@ -195,3 +195,51 @@ def test_security_headers(client):
 def test_api_docs_disabled(anon):
     assert anon.get("/docs").status_code == 404
     assert anon.get("/openapi.json").status_code == 404
+
+
+def _all_hits(client, q, mode):
+    return client.get("/api/search", params={
+        "q": q, "mode": mode, "shuffle": "false", "max_hits_per_episode": 500}).json()
+
+
+def test_hits_per_episode_are_capped_with_true_counts(client):
+    # A broad partial term used to return every hit of the page at once, and
+    # rendering them all froze the browser.
+    full = _all_hits(client, "ב", "partial")
+    capped = client.get("/api/search", params={
+        "q": "ב", "mode": "partial", "shuffle": "false", "max_hits_per_episode": 1}).json()
+
+    assert capped["total_hits"] == full["total_hits"] > len(capped["episodes"])
+    for ep in capped["episodes"]:
+        assert len(ep["hits"]) == 1
+        assert ep["hit_offset"] == 0
+    full_counts = {e["episode_idx"]: len(e["hits"]) for e in full["episodes"]}
+    assert {e["episode_idx"]: e["total_hits"] for e in capped["episodes"]} == full_counts
+    assert sum(full_counts.values()) == full["total_hits"]
+
+
+def test_episode_hits_page_in_order(client):
+    full = _all_hits(client, "ב", "partial")
+    ep = max(full["episodes"], key=lambda e: len(e["hits"]))
+    assert len(ep["hits"]) >= 3
+    offsets = [h["char_offset"] for h in ep["hits"]]
+
+    page = client.get("/api/search", params={
+        "q": "ב", "mode": "partial", "shuffle": "false",
+        "episode": ep["episode_idx"], "hit_offset": 1, "max_hits_per_episode": 2}).json()
+
+    assert [e["episode_idx"] for e in page["episodes"]] == [ep["episode_idx"]]
+    got = page["episodes"][0]
+    assert got["hit_offset"] == 1
+    assert got["total_hits"] == len(offsets)
+    assert [h["char_offset"] for h in got["hits"]] == offsets[1:3]
+
+
+def test_paging_an_episode_not_on_the_page_is_empty(client):
+    data = client.get("/api/search", params={"q": "ב", "mode": "partial", "episode": 9999}).json()
+    assert data["episodes"] == []
+
+
+def test_hits_per_episode_limit_is_bounded(client):
+    assert client.get("/api/search", params={"q": "ב", "max_hits_per_episode": 0}).status_code == 422
+    assert client.get("/api/search", params={"q": "ב", "max_hits_per_episode": 501}).status_code == 422

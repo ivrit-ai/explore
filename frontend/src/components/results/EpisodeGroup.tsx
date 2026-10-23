@@ -5,6 +5,9 @@ import { usePlayer } from '../../player/PlayerProvider';
 import { ChevronDownIcon } from '../icons';
 import { HitRow } from './HitRow';
 import styles from './EpisodeGroup.module.css';
+import { HITS_PAGE } from '../../lib/hitPaging';
+
+const matchCount = (n: number) => (n === 1 ? 'התאמה אחת' : `${n} התאמות`);
 
 interface Props {
   episode: Episode;
@@ -12,10 +15,16 @@ interface Props {
   mode: SearchMode;
   open: boolean;
   onToggle: () => void;
+  /** Count shown in the header; defaults to the hits passed in. */
+  total?: number;
+  /** Hits the server has beyond those loaded; shows a "show more" button. */
+  remaining?: number;
+  loadingMore?: boolean;
+  onLoadMore?: () => void;
 }
 
 /** One episode: serif title, a metadata line, and its matches indented beneath. */
-export function EpisodeGroup({ episode, hits, mode, open, onToggle }: Props) {
+export function EpisodeGroup({ episode, hits, mode, open, onToggle, total, remaining = 0, loadingMore, onLoadMore }: Props) {
   const player = usePlayer();
   const [contextFor, setContextFor] = useState<number | null>(null);
   const active = player.current?.episode.episode_idx === episode.episode_idx;
@@ -39,7 +48,7 @@ export function EpisodeGroup({ episode, hits, mode, open, onToggle }: Props) {
                 </>
               )}
               {' · '}
-              {hits.length === 1 ? 'התאמה אחת' : `${hits.length} התאמות`}
+              {matchCount(total ?? hits.length)}
             </span>
           </span>
           <span className={styles.chevron} aria-hidden="true">
@@ -59,6 +68,11 @@ export function EpisodeGroup({ episode, hits, mode, open, onToggle }: Props) {
               onToggleContext={() => setContextFor((c) => (c === hit.char_offset ? null : hit.char_offset))}
             />
           ))}
+          {remaining > 0 && onLoadMore && (
+            <button type="button" className={styles.more} onClick={onLoadMore} disabled={loadingMore}>
+              {loadingMore ? 'טוען…' : `הצג עוד ${Math.min(remaining, HITS_PAGE)} (נותרו ${remaining})`}
+            </button>
+          )}
         </div>
       )}
     </section>

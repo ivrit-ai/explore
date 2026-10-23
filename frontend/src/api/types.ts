@@ -23,6 +23,9 @@ export interface Episode {
   title: string;
   date: string | null;
   duration_sec: number;
+  /** All hits of this episode for the query; `hits` may hold only the first ones. */
+  total_hits: number;
+  hit_offset: number;
   hits: Hit[];
 }
 
