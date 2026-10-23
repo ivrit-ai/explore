@@ -55,12 +55,6 @@
   align-items: center;
 }
 
-.center {
-  flex: 1;
-  display: inline-flex;
-  justify-content: center;
-}
-
 /* Primary: the one accent-filled control on a screen */
 .primary {
   color: var(--accent-ink);

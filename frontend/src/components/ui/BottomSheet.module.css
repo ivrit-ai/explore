@@ -65,13 +65,6 @@
   overscroll-behavior: contain;
 }
 
-.footer {
-  flex: none;
-  padding: 12px 16px calc(16px + env(safe-area-inset-bottom));
-  border-top: 1px solid var(--line);
-  background: var(--s1);
-}
-
 @keyframes rise {
   from {
     transform: translateY(100%);

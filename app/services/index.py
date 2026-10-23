@@ -12,6 +12,8 @@ import re
 import sqlite3
 import uuid
 
+import regex
+
 from ..utils import FileRecord
 from .db import DatabaseService, SQLITE_MAX_PARAMS
 
@@ -31,7 +33,8 @@ class SearchTimeout(Exception):
 # each clause. Kept to a few so the candidate query stays cheap.
 MAX_PREFILTER_CLAUSES = 3
 
-_WORD_CHAR = None  # compiled lazily: the `regex` module's \w, which covers Hebrew marks
+# The `regex` module's \w, which also covers Hebrew vowel marks.
+_WORD_CHAR = regex.compile(r'\w')
 
 
 def regex_prefilter_tokens(query: str) -> Optional[list[list[str]]]:
@@ -71,10 +74,6 @@ class _RegexPrefilter:
     """
 
     def __init__(self, pattern: str):
-        global _WORD_CHAR
-        if _WORD_CHAR is None:
-            import regex
-            _WORD_CHAR = regex.compile(r'\w')
         self.s = pattern
         self.i = 0
 
@@ -737,7 +736,6 @@ class TranscriptIndex:
                   SQL LIMIT/OFFSET for pagination.
         """
         import random as random_mod
-        import regex
 
         log = logging.getLogger("index")
         log.info(f"FTS5 search: query={query}, mode={search_mode}, "
@@ -894,7 +892,6 @@ class TranscriptIndex:
 
         Returns None when regex mode has no extractable tokens (full-scan needed).
         """
-        import regex
         if search_mode == 'exact':
             escaped = query.replace('"', '""')
             return f'"{escaped}"'

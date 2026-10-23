@@ -36,5 +36,4 @@ def search_filters(
             regex.compile(query)
         except regex.error as e:
             raise HTTPException(status_code=400, detail=f"ביטוי רגולרי לא תקין: {e}")
-    sources = [s.strip() for s in source if s.strip()]
-    return SearchFilters(query, mode, date_from, date_to, sources or None)
+    return SearchFilters(query, mode, date_from, date_to, source or None)

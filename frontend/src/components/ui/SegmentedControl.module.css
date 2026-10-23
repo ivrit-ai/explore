@@ -67,7 +67,3 @@
   outline: 2px solid var(--tx);
   outline-offset: -2px;
 }
-
-.disabled {
-  opacity: 0.45;
-}
