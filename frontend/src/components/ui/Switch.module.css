@@ -32,8 +32,8 @@
 }
 
 .track[aria-checked='true'] {
-  background: #cfc8bd;
-  border-color: #cfc8bd;
+  background: var(--switch-on);
+  border-color: var(--switch-on);
 }
 
 .track[aria-checked='true'] .knob {
