@@ -2,6 +2,7 @@ from fastapi import APIRouter, Request, Query, Depends, HTTPException
 from starlette.responses import StreamingResponse
 from ..routes.auth import require_api_login
 from ..services.index import InvalidQuery, SearchTimeout
+from .api import query_errors
 from .params import SearchFilters, search_filters
 import io
 import csv
@@ -159,16 +160,14 @@ def export_results_csv(
              'complete': False, 'capped': False, 'timed_out': False}
     # Run the metadata query and the first batch before the response starts,
     # so a bad query still answers 400/422 instead of a truncated file.
-    try:
+    def start():
         meta = search_service.metadata(query, filters.mode, filters.date_from, filters.date_to, filters.sources)
         total_docs = int(meta.get('total_docs') or 0)
         batches = _sample_batches(search_service, filters, total_docs, seed,
                                   CSV_MAX_ROWS, CSV_TIME_BUDGET_S, CSV_DOC_BATCH, stats)
-        first = next(batches, [])
-    except InvalidQuery:
-        raise HTTPException(status_code=400, detail="לא ניתן לחפש את הביטוי הזה")
-    except SearchTimeout:
-        raise HTTPException(status_code=422, detail="הביטוי מורכב מדי והחיפוש נעצר. נסו ביטוי פשוט יותר.")
+        return total_docs, batches, next(batches, [])
+
+    total_docs, batches, first = query_errors(start)
 
     header = [
         ['# ivrit.ai Explore - Search Results Export'],

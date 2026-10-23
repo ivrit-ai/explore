@@ -1,11 +1,8 @@
 import type { AnchorHTMLAttributes, ButtonHTMLAttributes, ReactNode } from 'react';
-import { CheckIcon } from '../icons';
-import { Waveform } from './Waveform';
 import styles from './Button.module.css';
 
 type Variant = 'primary' | 'secondary' | 'ghost';
 type Size = 'md' | 'lg';
-export type ButtonStatus = 'idle' | 'loading' | 'success';
 
 interface CommonProps {
   variant?: Variant;
@@ -13,8 +10,6 @@ interface CommonProps {
   icon?: ReactNode;
   /** Trailing element: an arrow or a count. */
   trailing?: ReactNode;
-  status?: ButtonStatus;
-  successLabel?: ReactNode;
   block?: boolean;
   children?: ReactNode;
 }
@@ -23,23 +18,7 @@ function classes(variant: Variant, size: Size, block?: boolean, extra?: string) 
   return [styles.button, styles[variant], styles[size], block ? styles.block : '', extra ?? ''].join(' ');
 }
 
-function Content({ icon, trailing, status = 'idle', successLabel, children }: CommonProps) {
-  if (status === 'loading') {
-    return (
-      <span className={styles.center}>
-        <span className="sr-only">טוען</span>
-        <Waveform />
-      </span>
-    );
-  }
-  if (status === 'success') {
-    return (
-      <>
-        <span className={styles.label}>{successLabel ?? children}</span>
-        <CheckIcon size={18} />
-      </>
-    );
-  }
+function Content({ icon, trailing, children }: CommonProps) {
   return (
     <>
       {icon}
@@ -54,8 +33,6 @@ export function Button({
   size = 'md',
   icon,
   trailing,
-  status,
-  successLabel,
   block,
   children,
   className,
@@ -63,13 +40,8 @@ export function Button({
   ...rest
 }: CommonProps & ButtonHTMLAttributes<HTMLButtonElement>) {
   return (
-    <button
-      type={type}
-      className={classes(variant, size, block, className)}
-      aria-busy={status === 'loading' || undefined}
-      {...rest}
-    >
-      <Content icon={icon} trailing={trailing} status={status} successLabel={successLabel}>
+    <button type={type} className={classes(variant, size, block, className)} {...rest}>
+      <Content icon={icon} trailing={trailing}>
         {children}
       </Content>
     </button>

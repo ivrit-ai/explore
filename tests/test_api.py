@@ -156,6 +156,23 @@ def test_metadata(client):
     assert data["date_range"] == {"min": "2020-11-11", "max": "2022-02-07"}
 
 
+@pytest.mark.parametrize("q", [r"\d+", "[רב]", "ב"])
+def test_metadata_for_regex_without_words_counts_every_episode(client, q):
+    # These used to report 0 episodes while the search itself found results.
+    data = client.get("/api/search/metadata", params={"q": q, "mode": "regex"}).json()
+    assert data["total_docs"] == 2
+    assert {s["name"] for s in data["sources"]} == {"929", "אחד ביום"}
+    filtered = client.get("/api/search/metadata", params={"q": q, "mode": "regex", "date_from": "2021-01-01"}).json()
+    assert filtered["total_docs"] == 1
+
+
+def test_regex_optional_group_does_not_drop_matches(client):
+    # "ים" used to become a required word, and no episode has a word starting with it.
+    data = client.get("/api/search", params={"q": "שלום(ים)?", "mode": "regex", "shuffle": "false"}).json()
+    found = {h["text"][h["match"]["start"]:h["match"]["end"]] for e in data["episodes"] for h in e["hits"]}
+    assert found == {"שלום"}
+
+
 def test_episode_segments(client):
     segs = client.get("/api/episodes/0/segments", params={"center": 1, "radius": 1}).json()
     assert [s["segment_idx"] for s in segs] == [0, 1, 2]

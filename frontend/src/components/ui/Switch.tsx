@@ -6,17 +6,15 @@ interface Props {
   label: string;
   /** "pill" shows the label inside a toggle chip (e.g. "רק הקטע"). */
   variant?: 'switch' | 'pill';
-  disabled?: boolean;
 }
 
-export function Switch({ checked, onChange, label, variant = 'switch', disabled }: Props) {
+export function Switch({ checked, onChange, label, variant = 'switch' }: Props) {
   if (variant === 'pill') {
     return (
       <button
         type="button"
         role="switch"
         aria-checked={checked}
-        disabled={disabled}
         className={styles.pill}
         onClick={() => onChange(!checked)}
       >
@@ -33,7 +31,6 @@ export function Switch({ checked, onChange, label, variant = 'switch', disabled 
         role="switch"
         aria-checked={checked}
         aria-label={label}
-        disabled={disabled}
         className={styles.track}
         onClick={() => onChange(!checked)}
       >

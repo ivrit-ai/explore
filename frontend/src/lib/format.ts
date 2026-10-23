@@ -12,9 +12,5 @@ export function formatTime(totalSeconds: number): string {
 export function formatDate(iso: string | null): string {
   if (!iso) return '';
   const [y, m, d] = iso.slice(0, 10).split('-');
-  return d && m && y ? `${d}.${m}.${y}` : iso;
-}
-
-export function plural(n: number, one: string, many: string): string {
-  return n === 1 ? one : `${n.toLocaleString('he-IL')} ${many}`;
+  return `${d}.${m}.${y}`;
 }

@@ -101,14 +101,16 @@ def _relative_span(start: int, end: int, seg_offset: int, seg_len: int) -> Optio
     return Span(start=s, end=e)
 
 
-def _query_errors(fn):
+def query_errors(fn):
     """Translate search-layer failures into client errors."""
     try:
         return fn()
-    except InvalidQuery:
-        raise HTTPException(status_code=400, detail="לא ניתן לחפש את הביטוי הזה")
-    except SearchTimeout:
-        raise HTTPException(status_code=422, detail="הביטוי מורכב מדי והחיפוש נעצר. נסו ביטוי פשוט יותר.")
+    except InvalidQuery as exc:
+        logger.exception("Search rejected the query")
+        raise HTTPException(status_code=400, detail="לא ניתן לחפש את הביטוי הזה") from exc
+    except SearchTimeout as exc:
+        logger.exception("Search exceeded its time budget")
+        raise HTTPException(status_code=422, detail="הביטוי מורכב מדי והחיפוש נעצר. נסו ביטוי פשוט יותר.") from exc
 
 
 @router.get("/me", response_model=Me)
@@ -137,7 +139,7 @@ def search(
         seed = None
 
     search_service = request.app.state.search_service
-    hits, has_more = _query_errors(lambda: search_service.search(
+    hits, has_more = query_errors(lambda: search_service.search(
         filters.q, search_mode=filters.mode, date_from=filters.date_from,
         date_to=filters.date_to, sources=filters.sources,
         doc_limit=per_page, doc_offset=(page - 1) * per_page, seed=seed,
@@ -163,21 +165,20 @@ def search(
 
     episodes: dict[int, Episode] = {}
     for h in kept:
-        seg = segments.get((h.episode_idx, h.char_offset))
-        doc = docs.get(h.episode_idx)
-        if not seg or not doc:
-            continue
-        text = seg["text"] or ""
+        seg = segments[(h.episode_idx, h.char_offset)]
+        doc = docs[h.episode_idx]
+        text = seg["text"]
         offset = seg["char_offset"]
         episode = episodes.get(h.episode_idx)
         if episode is None:
             episode = episodes[h.episode_idx] = Episode(
                 episode_idx=h.episode_idx,
                 uuid=doc["uuid"],
-                source=doc["source"] or "",
-                title=doc["episode_title"] or doc["episode"] or "",
-                date=str(doc["episode_date"]) if doc["episode_date"] else None,
-                duration_sec=durations.get(h.episode_idx, 0.0),
+                source=doc["source"],
+                # Episodes named only by a date have an empty title.
+                title=doc["episode_title"] or doc["episode"],
+                date=doc["episode_date"],
+                duration_sec=durations[h.episode_idx],
                 total_hits=len(by_episode[h.episode_idx]),
                 hit_offset=offsets[h.episode_idx],
                 hits=[],
@@ -200,7 +201,8 @@ def search(
             page=page,
             execution_time_ms=(time.time() - started) * 1000,
             results_count=total_hits,
-            total_results=total_hits,
+            # Search is paginated by episode; the total across pages isn't known here.
+            total_results=None,
             user_email=user_email,
         )
 
@@ -212,15 +214,12 @@ def search(
 
 @router.get("/search/metadata", response_model=MetadataResponse)
 def search_metadata(request: Request, filters: SearchFilters = Depends(search_filters)):
-    meta = _query_errors(lambda: request.app.state.search_service.metadata(
+    meta = query_errors(lambda: request.app.state.search_service.metadata(
         filters.q, filters.mode, filters.date_from, filters.date_to, filters.sources))
     sources = sorted(meta["sources"].items(), key=lambda kv: -kv[1])
     return MetadataResponse(
         sources=[SourceCount(name=n, count=c) for n, c in sources],
-        date_range=DateRange(
-            min=str(meta["date_range"]["min"]) if meta["date_range"]["min"] else None,
-            max=str(meta["date_range"]["max"]) if meta["date_range"]["max"] else None,
-        ),
+        date_range=DateRange(**meta["date_range"]),
         total_docs=meta["total_docs"],
     )
 
@@ -237,7 +236,6 @@ def episode_segments(
     lookups = [(episode_idx, i) for i in range(max(0, center - radius), center + radius + 1)]
     rows = index.get_segments_by_ids(lookups)
     return [
-        Segment(segment_idx=r["segment_id"], start_sec=r["start_time"], end_sec=r["end_time"], text=r["text"] or "")
+        Segment(segment_idx=r["segment_id"], start_sec=r["start_time"], end_sec=r["end_time"], text=r["text"])
         for r in sorted(rows, key=lambda r: r["segment_id"])
-        if r["doc_id"] == episode_idx
     ]

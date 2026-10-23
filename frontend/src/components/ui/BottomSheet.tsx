@@ -9,13 +9,11 @@ interface Props {
   onClose: () => void;
   title: string;
   children: ReactNode;
-  footer?: ReactNode;
   /** Full-height sheet (player) vs content-height (filters, menu). */
   tall?: boolean;
-  actions?: ReactNode;
 }
 
-export function BottomSheet({ open, onClose, title, children, footer, tall, actions }: Props) {
+export function BottomSheet({ open, onClose, title, children, tall }: Props) {
   const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -51,13 +49,11 @@ export function BottomSheet({ open, onClose, title, children, footer, tall, acti
         <div className={styles.grabber} aria-hidden="true" />
         <div className={styles.head}>
           <h2 className={styles.title}>{title}</h2>
-          {actions}
           <IconButton label="סגירה" onClick={onClose}>
             <CloseIcon />
           </IconButton>
         </div>
         <div className={styles.body}>{children}</div>
-        {footer && <div className={styles.footer}>{footer}</div>}
       </div>
     </div>,
     document.body,

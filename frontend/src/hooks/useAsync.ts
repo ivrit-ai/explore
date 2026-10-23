@@ -27,7 +27,13 @@ export function useAsync<T>(fn: ((signal: AbortSignal) => Promise<T>) | null, ke
       .catch((err: unknown) => {
         if (controller.signal.aborted) return;
         setData(null);
-        setError(err instanceof ApiError ? err.message : 'החיבור לשרת נכשל. נסו שוב.');
+        if (err instanceof ApiError) {
+          setError(err.message);
+        } else {
+          // Network failure or a bug: show a retryable message, keep the cause visible.
+          console.error(err);
+          setError('החיבור לשרת נכשל. נסו שוב.');
+        }
       })
       .finally(() => {
         if (!controller.signal.aborted) setLoading(false);

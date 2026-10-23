@@ -21,7 +21,6 @@ interface PlayerApi {
   play: (item: PlayerItem, startAt?: number) => void;
   toggle: () => void;
   seekBy: (seconds: number) => void;
-  seekTo: (seconds: number) => void;
   next: () => void;
   prev: () => void;
   cycleSpeed: () => void;
@@ -133,11 +132,6 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const seekTo = useCallback((seconds: number) => {
-    const audio = audioRef.current;
-    if (audio) audio.currentTime = Math.max(0, seconds);
-  }, []);
-
   const seekBy = useCallback((delta: number) => {
     const audio = audioRef.current;
     if (audio) audio.currentTime = Math.max(0, audio.currentTime + delta);
@@ -180,14 +174,13 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       play,
       toggle,
       seekBy,
-      seekTo,
       next: () => step(1),
       prev: () => step(-1),
       cycleSpeed,
       setClipOnly,
       isCurrent: (episode, hit) => sameHit(current, episode, hit),
     }),
-    [current, playing, loading, error, speedIndex, clipOnly, index, queue.length, play, toggle, seekBy, seekTo, step, cycleSpeed],
+    [current, playing, loading, error, speedIndex, clipOnly, index, queue.length, play, toggle, seekBy, step, cycleSpeed],
   );
 
   return (

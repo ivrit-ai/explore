@@ -12,11 +12,10 @@ interface Props<T extends string> {
   value: T;
   onChange: (value: T) => void;
   size?: 'md' | 'sm';
-  disabled?: boolean;
 }
 
 /** One track with an indicator that slides between options (radiogroup semantics). */
-export function SegmentedControl<T extends string>({ label, options, value, onChange, size = 'md', disabled }: Props<T>) {
+export function SegmentedControl<T extends string>({ label, options, value, onChange, size = 'md' }: Props<T>) {
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
   const index = Math.max(0, options.findIndex((o) => o.value === value));
 
@@ -34,8 +33,7 @@ export function SegmentedControl<T extends string>({ label, options, value, onCh
     <div
       role="radiogroup"
       aria-label={label}
-      aria-disabled={disabled || undefined}
-      className={`${styles.track} ${styles[size]} ${disabled ? styles.disabled : ''}`}
+      className={`${styles.track} ${styles[size]}`}
       style={{ ['--count' as string]: options.length, ['--index' as string]: index }}
       onKeyDown={onKeyDown}
     >
@@ -50,7 +48,6 @@ export function SegmentedControl<T extends string>({ label, options, value, onCh
           role="radio"
           aria-checked={i === index}
           tabIndex={i === index ? 0 : -1}
-          disabled={disabled}
           className={styles.option}
           onClick={() => onChange(o.value)}
         >

@@ -123,14 +123,16 @@ def build_tsquery(query: str, search_mode: str) -> tuple[Optional[str], Optional
         return "to_tsquery", " | ".join(f"{_quote_lexeme(t)}:*" for t in tokens)
 
     if search_mode == "regex":
-        # Same token choice as the sqlite backend: escapes and character
-        # classes don't contribute letters, and alternation ORs every token.
-        prefilter = regex_prefilter_tokens(query)
-        if prefilter is None:
+        # Same clauses as the sqlite backend: only words every match must contain.
+        clauses = regex_prefilter_tokens(query)
+        if clauses is None:
             return None, None
-        tokens, any_token = prefilter
-        joiner = " | " if any_token else " & "
-        return "to_tsquery", joiner.join(f"{_quote_lexeme(t)}:*" for t in tokens)
+
+        def clause_tsquery(tokens):
+            terms = [f"{_quote_lexeme(t)}:*" for t in tokens]
+            return terms[0] if len(terms) == 1 else "(" + " | ".join(terms) + ")"
+
+        return "to_tsquery", " & ".join(clause_tsquery(c) for c in clauses)
 
     raise ValueError(f"Unknown search mode: {search_mode}")
 
@@ -358,7 +360,9 @@ class PostgresTranscriptIndex:
         """Aggregated source counts and date range for a query."""
         match, params = self._match_clause(query, search_mode)
         if match is None:
-            return {"sources": {}, "date_range": {"min": None, "max": None}, "total_docs": 0}
+            # No word to narrow on (e.g. \d+): every episode is a candidate,
+            # exactly as the search itself scans them all.
+            match, params = "TRUE", []
 
         sql = f"""
             SELECT d.source, COUNT(*), MIN(d.episode_date), MAX(d.episode_date)
