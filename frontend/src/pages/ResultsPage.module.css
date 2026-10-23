@@ -165,3 +165,9 @@
     width: 100%;
   }
 }
+
+.exportNote {
+  margin: 0 0 16px;
+  font-size: 13px;
+  color: var(--tx-3);
+}

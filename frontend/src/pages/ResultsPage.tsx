@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { csvExportUrl, episodeHits, search } from '../api/client';
+import { CSV_ROW_LIMIT, csvExportUrl, episodeHits, search } from '../api/client';
 import type { Episode, Hit, SearchMode } from '../api/types';
 import { FilterPanel, type FilterValues } from '../components/filters/FilterPanel';
 import { DownloadIcon, FilterIcon, ShuffleIcon } from '../components/icons';
@@ -120,6 +120,10 @@ export function ResultsPage() {
     ? episodes.map((e) => ({ ...e, hits: e.hits.filter((h) => keyOfHit(h) === focus) })).filter((e) => e.hits.length)
     : episodes;
 
+  // A page this large means the full result set likely exceeds the CSV limit.
+  const broad = !!data && data.has_more && data.total_hits > CSV_ROW_LIMIT / 100;
+  const csvNote = `ייצוא CSV כולל עד ${CSV_ROW_LIMIT.toLocaleString('he-IL')} שורות. בתוצאות גדולות יותר מתקבל מדגם מאוזן מכל הפרקים.`;
+
   const activeFilters = (state.dateFrom || state.dateTo ? 1 : 0) + (state.sources.length ? 1 : 0);
   const filterPanel = (layout: 'sidebar' | 'sheet') => <FilterPanel key={filterKey} state={state} onApply={onFilters} layout={layout} />;
 
@@ -162,11 +166,13 @@ export function ResultsPage() {
                   ערבוב מחדש
                 </Button>
               )}
-              <ButtonLink icon={<DownloadIcon size={16} />} href={csvExportUrl(state)} download>
+              <ButtonLink icon={<DownloadIcon size={16} />} href={csvExportUrl(state)} download title={csvNote}>
                 ייצוא CSV
               </ButtonLink>
             </div>
           </div>
+
+          {broad && <p className={styles.exportNote}>{csvNote}</p>}
 
           {error && (
             <div className={styles.notice} role="alert">

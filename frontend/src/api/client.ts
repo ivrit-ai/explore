@@ -78,6 +78,9 @@ export function me(signal?: AbortSignal) {
   return getJSON<Me>('/api/me', undefined, signal);
 }
 
+/** Matches the server's CSV_MAX_ROWS: larger exports are a balanced sample. */
+export const CSV_ROW_LIMIT = 100_000;
+
 export function csvExportUrl(state: SearchState) {
   return `/api/export/csv?${filterParams(state)}`;
 }

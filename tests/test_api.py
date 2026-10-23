@@ -243,3 +243,69 @@ def test_paging_an_episode_not_on_the_page_is_empty(client):
 def test_hits_per_episode_limit_is_bounded(client):
     assert client.get("/api/search", params={"q": "ב", "max_hits_per_episode": 0}).status_code == 422
     assert client.get("/api/search", params={"q": "ב", "max_hits_per_episode": 501}).status_code == 422
+
+
+def _csv(client, monkeypatch, q, mode="partial", **limits):
+    from app.routes import export
+    for name, value in limits.items():
+        monkeypatch.setattr(export, name, value)
+    resp = client.get("/api/export/csv", params={"q": q, "mode": mode})
+    assert resp.status_code == 200
+    lines = resp.content.decode("utf-8-sig").splitlines()
+    header_at = next(i for i, line in enumerate(lines) if line.startswith("Episode Index"))
+    rows = [line for line in lines[header_at + 1:] if line and not line.startswith("#")]
+    summary = next(line for line in lines if line.startswith("# Summary:"))
+    return lines, rows, summary
+
+
+def test_csv_small_export_is_complete(client, monkeypatch):
+    _, rows, summary = _csv(client, monkeypatch, "בינה", mode="exact")
+    assert len(rows) == 1
+    assert "all matches exported" in summary
+
+
+def test_csv_export_is_capped_and_balanced(client, monkeypatch):
+    # A broad partial term used to build every match in memory and kill the worker.
+    full = _all_hits(client, "[בר]", "regex")
+    per_episode = {e["episode_idx"]: len(e["hits"]) for e in full["episodes"]}
+    assert len(per_episode) == 2 and sum(per_episode.values()) > 4
+
+    lines, rows, summary = _csv(client, monkeypatch, "[בר]", "regex", CSV_MAX_ROWS=4, CSV_DOC_BATCH=1)
+
+    assert len(rows) == 4
+    assert "row limit reached" in summary
+    # Both episodes are represented rather than the first one filling the cap.
+    assert {row.split(",")[0] for row in rows} == {str(i) for i in per_episode}
+    assert any(line.startswith("# Matching Episodes:,") for line in lines)
+
+
+def test_csv_export_stops_at_time_budget(client, monkeypatch):
+    _, rows, summary = _csv(client, monkeypatch, "[בר]", "regex", CSV_TIME_BUDGET_S=0, CSV_DOC_BATCH=1)
+    assert rows  # the first batch is always exported
+    assert "time limit reached" in summary
+    assert len({row.split(",")[0] for row in rows}) == 1
+
+
+def test_csv_export_streams(client, monkeypatch):
+    from app.routes import export
+    from starlette.responses import StreamingResponse
+    seen = {}
+    real = export.StreamingResponse
+
+    def spy(content, *args, **kwargs):
+        seen["iterator"] = not isinstance(content, (bytes, str)) and not hasattr(content, "getvalue")
+        return real(content, *args, **kwargs)
+
+    monkeypatch.setattr(export, "StreamingResponse", spy)
+    assert client.get("/api/export/csv", params={"q": "ב", "mode": "partial"}).status_code == 200
+    assert seen["iterator"]
+
+
+def test_csv_export_bad_regex_is_400(client):
+    assert client.get("/api/export/csv", params={"q": "(שלום", "mode": "regex"}).status_code == 400
+
+
+def test_spread_picks_evenly():
+    from app.routes.export import _spread
+    assert _spread(list(range(10)), 3) == [0, 3, 6]
+    assert _spread([1, 2], 5) == [1, 2]

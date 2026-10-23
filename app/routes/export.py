@@ -7,6 +7,7 @@ import io
 import csv
 import subprocess
 import logging
+import random
 import time
 import re
 import unicodedata
@@ -39,6 +40,108 @@ MAX_CLIP_SECONDS = 600
 FFMPEG_TIMEOUT_S = 60
 
 
+# CSV export limits. A broad term (e.g. a one-letter partial search) matches
+# millions of times; building all of that in memory killed the worker and no
+# spreadsheet could open the result. Exports are a balanced sample instead.
+CSV_MAX_ROWS = 100_000
+CSV_TIME_BUDGET_S = 60.0
+CSV_DOC_BATCH = 100
+
+
+def _spread(items: list, k: int) -> list:
+    """k items evenly spaced across the list (all of them when k >= len)."""
+    n = len(items)
+    if k >= n:
+        return items
+    return [items[(i * n) // k] for i in range(k)]
+
+
+def _csv_line(row) -> str:
+    buf = io.StringIO()
+    csv.writer(buf, dialect='excel').writerow(row)
+    return buf.getvalue()
+
+
+def _sample_batches(search_service, filters: SearchFilters, total_docs: int, seed: int,
+                    max_rows: int, time_budget_s: float, doc_batch: int, stats: dict):
+    """Yield lists of (hit, doc_info, target_segment, context) for a balanced sample.
+
+    Episodes are visited in shuffled order, a batch at a time. Each episode's
+    share is (rows left) / (episodes left), so capacity a small episode leaves
+    unused rolls over to later ones. Sampling stops at max_rows or when the
+    time budget runs out; since the order is shuffled, the episodes covered by
+    then are still a random sample.
+    """
+    index = search_service._index_mgr.get()
+    deadline = time.monotonic() + time_budget_s
+    offset = 0
+    while stats['rows'] < max_rows:
+        hits, has_more = search_service.search(
+            filters.q, search_mode=filters.mode, date_from=filters.date_from,
+            date_to=filters.date_to, sources=filters.sources,
+            doc_limit=doc_batch, doc_offset=offset, seed=seed)
+        offset += doc_batch
+
+        by_doc: dict[int, list] = {}
+        for h in hits:
+            by_doc.setdefault(h.episode_idx, []).append(h)
+
+        picked = []
+        batch_docs = list(by_doc.values())
+        for i, doc_hits in enumerate(batch_docs):
+            stats['episodes_seen'] += 1
+            stats['hits_seen'] += len(doc_hits)
+            room = max_rows - stats['rows'] - len(picked)
+            if room <= 0:
+                break
+            # The metadata count can be missing (it reports 0 for some regexes),
+            # so never assume fewer episodes remain than this batch and, when
+            # there is more, at least one further batch.
+            seen_here = len(batch_docs) - i + (doc_batch if has_more else 0)
+            docs_left = max(1, total_docs - stats['episodes_seen'] + 1, seen_here)
+            share = max(1, -(-room // docs_left))  # ceil division
+            take = _spread(doc_hits, min(share, room))
+            stats['episodes_sampled'] += 1
+            picked.extend(take)
+
+        rows = []
+        if picked:
+            targets = index.get_segments_at_offsets([(h.episode_idx, h.char_offset) for h in picked])
+            wanted = set()
+            for h in picked:
+                t = targets.get((h.episode_idx, h.char_offset))
+                if t:
+                    sid = t["segment_id"]
+                    wanted.update(
+                        (h.episode_idx, sid + d)
+                        for d in range(-DEFAULT_CONTEXT_SEGMENTS_LENGTH, DEFAULT_CONTEXT_SEGMENTS_LENGTH + 1)
+                        if sid + d >= 0)
+            # get_segments_by_ids returns an unordered list; key it explicitly.
+            seg_map = {(x["doc_id"], x["segment_id"]): x for x in index.get_segments_by_ids(list(wanted))}
+            docs = index.get_documents_batch(list({h.episode_idx for h in picked}))
+            for h in picked:
+                t = targets.get((h.episode_idx, h.char_offset))
+                if not t:
+                    continue
+                sid = t["segment_id"]
+                context = ' '.join(
+                    seg_map[(h.episode_idx, i)]['text']
+                    for i in range(sid - DEFAULT_CONTEXT_SEGMENTS_LENGTH, sid + DEFAULT_CONTEXT_SEGMENTS_LENGTH + 1)
+                    if seg_map.get((h.episode_idx, i), {}).get('text'))
+                rows.append((h, docs.get(h.episode_idx, {}), t, context))
+            stats['rows'] += len(rows)
+        yield rows
+
+        if not has_more:
+            stats['complete'] = stats['rows'] >= stats['hits_seen']
+            stats['capped'] = not stats['complete'] and stats['rows'] >= max_rows
+            return
+        if time.monotonic() > deadline:
+            stats['timed_out'] = True
+            return
+    stats['capped'] = True
+
+
 @router.get('/csv', name='export.export_results_csv')
 def export_results_csv(
     request: Request,
@@ -46,116 +149,92 @@ def export_results_csv(
     user_email: str = Depends(require_api_login),
 ):
     start_time = time.time()
-
     search_service = request.app.state.search_service
     query = filters.q
+    logger.info(f"CSV export: {query} (mode: {filters.mode}, date_from={filters.date_from}, "
+                f"date_to={filters.date_to}, sources={filters.sources})")
 
-    logger.info(f"Performing search for CSV export: {query} (mode: {filters.mode}, filters: date_from={filters.date_from}, date_to={filters.date_to}, sources={filters.sources})")
+    seed = random.randint(0, 2**31 - 1)
+    stats = {'rows': 0, 'episodes_seen': 0, 'episodes_sampled': 0, 'hits_seen': 0,
+             'complete': False, 'capped': False, 'timed_out': False}
+    # Run the metadata query and the first batch before the response starts,
+    # so a bad query still answers 400/422 instead of a truncated file.
     try:
-        hits, _ = search_service.search(query, search_mode=filters.mode,
-                                        date_from=filters.date_from, date_to=filters.date_to,
-                                        sources=filters.sources)
+        meta = search_service.metadata(query, filters.mode, filters.date_from, filters.date_to, filters.sources)
+        total_docs = int(meta.get('total_docs') or 0)
+        batches = _sample_batches(search_service, filters, total_docs, seed,
+                                  CSV_MAX_ROWS, CSV_TIME_BUDGET_S, CSV_DOC_BATCH, stats)
+        first = next(batches, [])
     except InvalidQuery:
         raise HTTPException(status_code=400, detail="לא ניתן לחפש את הביטוי הזה")
     except SearchTimeout:
         raise HTTPException(status_code=422, detail="הביטוי מורכב מדי והחיפוש נעצר. נסו ביטוי פשוט יותר.")
 
-    index = search_service._index_mgr.get()
-
-    # Target segment per hit, then one batch fetch for target + context segments
-    targets = index.get_segments_at_offsets([(h.episode_idx, h.char_offset) for h in hits])
-    segments_to_fetch = set()
-    for h in hits:
-        target = targets.get((h.episode_idx, h.char_offset))
-        if not target:
-            continue
-        seg_idx = target["segment_id"]
-        for offset in range(-DEFAULT_CONTEXT_SEGMENTS_LENGTH, DEFAULT_CONTEXT_SEGMENTS_LENGTH + 1):
-            if seg_idx + offset >= 0:
-                segments_to_fetch.add((h.episode_idx, seg_idx + offset))
-
-    # get_segments_by_ids returns an unordered list; key it explicitly.
-    segment_map = {(s["doc_id"], s["segment_id"]): s for s in index.get_segments_by_ids(list(segments_to_fetch))}
-    docs = index.get_documents_batch(list({h.episode_idx for h in hits}))
-
-    all_results = []
-    for h in hits:
-        target = targets.get((h.episode_idx, h.char_offset))
-        if not target:
-            continue
-        seg_idx = target["segment_id"]
-        context_parts = []
-        for ctx_idx in range(seg_idx - DEFAULT_CONTEXT_SEGMENTS_LENGTH, seg_idx + DEFAULT_CONTEXT_SEGMENTS_LENGTH + 1):
-            ctx_seg = segment_map.get((h.episode_idx, ctx_idx))
-            if ctx_seg and ctx_seg.get('text'):
-                context_parts.append(ctx_seg['text'])
-
-        doc_info = docs.get(h.episode_idx, {})
-        all_results.append({
-            "episode_idx": h.episode_idx,
-            "podcast_title": doc_info.get("source", ""),
-            "date": doc_info.get("episode_date", ""),
-            "episode_title": doc_info.get("episode_title", ""),
-            "start": target.get('start_time', ''),
-            "end": target.get('end_time', ''),
-            "text": target.get('text', ''),
-            "context": ' '.join(context_parts),
-        })
-
-    # Create CSV in memory with UTF-8 BOM for Excel compatibility
-    output = io.StringIO()
-    output.write('﻿')  # UTF-8 BOM
-    writer = csv.writer(output, dialect='excel')
-
-    # Write metadata as comments (info rows)
-    writer.writerow(['# ivrit.ai Explore - Search Results Export'])
-    writer.writerow(['# Query:', query])
-    writer.writerow(['# Search Mode:', filters.mode])
+    header = [
+        ['# ivrit.ai Explore - Search Results Export'],
+        ['# Query:', query],
+        ['# Search Mode:', filters.mode],
+    ]
     if filters.date_from:
-        writer.writerow(['# Date From:', filters.date_from])
+        header.append(['# Date From:', filters.date_from])
     if filters.date_to:
-        writer.writerow(['# Date To:', filters.date_to])
+        header.append(['# Date To:', filters.date_to])
     if filters.sources:
-        writer.writerow(['# Sources Filter:', ', '.join(filters.sources)])
-    writer.writerow(['# Total Results:', len(all_results)])
-    writer.writerow(['# Exported:', datetime.now().strftime('%Y-%m-%d %H:%M:%S')])
-    writer.writerow([])
+        header.append(['# Sources Filter:', ', '.join(filters.sources)])
+    header += [
+        ['# Matching Episodes:', total_docs if total_docs else 'unknown'],
+        ['# Row Limit:', f'{CSV_MAX_ROWS} (balanced sample across episodes; see the summary at the end)'],
+        ['# Sample Seed:', seed],
+        ['# Exported:', datetime.now().strftime('%Y-%m-%d %H:%M:%S')],
+        [],
+        ['Episode Index', 'Date', 'Source', 'Episode', 'Text', 'Context', 'Start Time', 'End Time'],
+    ]
 
-    writer.writerow([
-        'Episode Index', 'Date', 'Source', 'Episode',
-        'Text', 'Context', 'Start Time', 'End Time'
-    ])
+    def row_lines(rows):
+        for h, doc, t, context in rows:
+            yield _csv_line([h.episode_idx, doc.get('episode_date', ''), doc.get('source', ''),
+                             doc.get('episode_title', ''), t.get('text', ''), context,
+                             t.get('start_time', ''), t.get('end_time', '')])
 
-    for r in all_results:
-        writer.writerow([
-            r['episode_idx'],
-            r['date'],
-            r['podcast_title'],
-            r['episode_title'],
-            r['text'],
-            r['context'],
-            r['start'],
-            r['end'],
-        ])
+    def body():
+        yield '﻿'  # UTF-8 BOM so Excel detects the encoding
+        for line in header:
+            yield _csv_line(line)
+        yield from row_lines(first)
+        try:
+            for rows in batches:
+                yield from row_lines(rows)
+        except (InvalidQuery, SearchTimeout) as exc:
+            logger.warning("CSV export stopped early: %s", exc)
+            stats['timed_out'] = True
 
-    execution_time = (time.time() - start_time) * 1000
+        if stats['complete']:
+            note = 'all matches exported'
+        elif stats['capped']:
+            note = f'row limit reached; sampled evenly across {stats["episodes_sampled"]} episodes'
+        elif stats['timed_out']:
+            of_total = f' of {total_docs}' if total_docs else ''
+            note = (f'time limit reached; sampled {stats["episodes_sampled"]}{of_total} '
+                    f'matching episodes in random order')
+        else:
+            note = f'sampled across {stats["episodes_sampled"]} episodes'
+        yield _csv_line([])
+        yield _csv_line(['# Summary:', f'{stats["rows"]} rows exported of {stats["hits_seen"]} matches seen - {note}'])
 
-    analytics = request.app.state.analytics
-    if analytics:
-        analytics.capture_export(
-            export_type='csv',
-            query=query,
-            execution_time_ms=execution_time,
-            url=str(request.url),
-            user_email=user_email,
-        )
+        analytics = request.app.state.analytics
+        if analytics:
+            analytics.capture_export(export_type='csv', query=query,
+                                     execution_time_ms=(time.time() - start_time) * 1000,
+                                     url=str(request.url), user_email=user_email)
+
+    def encoded():
+        for chunk in body():
+            yield chunk.encode('utf-8')
 
     # ASCII-only filename; the query itself stays inside the file.
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    filename = f'ivrit_explore_{timestamp}.csv'
-
+    filename = f'ivrit_explore_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
     return StreamingResponse(
-        io.BytesIO(output.getvalue().encode('utf-8')),
+        encoded(),
         media_type='text/csv; charset=utf-8',
         headers={'Content-Disposition': _content_disposition(filename)},
     )
