@@ -40,14 +40,23 @@ class StubIndex(PostgresTranscriptIndex):
 
 def test_regex_tsquery_ignores_escapes_and_classes():
     assert build_tsquery(r"\bבינה\b", "regex") == ("to_tsquery", "'בינה':*")
-    assert build_tsquery(r"[a-z]+\dשלום", "regex") == ("to_tsquery", "'שלום':*")
+    assert build_tsquery(r"[a-z]+ שלום", "regex") == ("to_tsquery", "'שלום':*")
+    # Right after \d the word may continue a longer token ("5שלום"), so it
+    # can't be used as a prefix.
+    assert build_tsquery(r"[a-z]+\dשלום", "regex") == (None, None)
 
 
-def test_regex_tsquery_alternation_ors_every_token():
+def test_regex_tsquery_alternation_is_one_or_clause():
     func, arg = build_tsquery(r"(שלום|היי)\s+(חברים)", "regex")
-    assert arg == "'שלום':* | 'היי':* | 'חברים':*"
+    # Every match has one greeting AND חברים.
+    assert arg == "('היי':* | 'שלום':*) & 'חברים':*"
     # Not truncated to three: any branch alone may be the match.
     assert build_tsquery("אא|בב|גג|דד", "regex")[1].count("|") == 3
+
+
+def test_regex_tsquery_skips_optional_parts():
+    assert build_tsquery("שלום?", "regex") == ("to_tsquery", "'שלו':*")
+    assert build_tsquery("שלום(ים)?", "regex") == ("to_tsquery", "'שלום':*")
 
 
 def test_regex_tsquery_branch_without_token_scans_everything():

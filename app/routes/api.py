@@ -101,7 +101,7 @@ def _relative_span(start: int, end: int, seg_offset: int, seg_len: int) -> Optio
     return Span(start=s, end=e)
 
 
-def _query_errors(fn):
+def query_errors(fn):
     """Translate search-layer failures into client errors."""
     try:
         return fn()
@@ -137,7 +137,7 @@ def search(
         seed = None
 
     search_service = request.app.state.search_service
-    hits, has_more = _query_errors(lambda: search_service.search(
+    hits, has_more = query_errors(lambda: search_service.search(
         filters.q, search_mode=filters.mode, date_from=filters.date_from,
         date_to=filters.date_to, sources=filters.sources,
         doc_limit=per_page, doc_offset=(page - 1) * per_page, seed=seed,
@@ -200,7 +200,8 @@ def search(
             page=page,
             execution_time_ms=(time.time() - started) * 1000,
             results_count=total_hits,
-            total_results=total_hits,
+            # Search is paginated by episode; the total across pages isn't known here.
+            total_results=None,
             user_email=user_email,
         )
 
@@ -212,7 +213,7 @@ def search(
 
 @router.get("/search/metadata", response_model=MetadataResponse)
 def search_metadata(request: Request, filters: SearchFilters = Depends(search_filters)):
-    meta = _query_errors(lambda: request.app.state.search_service.metadata(
+    meta = query_errors(lambda: request.app.state.search_service.metadata(
         filters.q, filters.mode, filters.date_from, filters.date_to, filters.sources))
     sources = sorted(meta["sources"].items(), key=lambda kv: -kv[1])
     return MetadataResponse(
@@ -239,5 +240,4 @@ def episode_segments(
     return [
         Segment(segment_idx=r["segment_id"], start_sec=r["start_time"], end_sec=r["end_time"], text=r["text"] or "")
         for r in sorted(rows, key=lambda r: r["segment_id"])
-        if r["doc_id"] == episode_idx
     ]

@@ -17,20 +17,27 @@ export const DEFAULT_PER_PAGE = 50;
 export const PER_PAGE_OPTIONS = [20, 50, 100, 200];
 const MODES: SearchMode[] = ['exact', 'partial', 'regex'];
 
+// Mirror the API's limits (app/routes/api.py) so an old or edited link is
+// corrected here instead of failing with a 422.
+const MAX_PER_PAGE = 500;
+const MAX_PAGE = 10_000;
+const MAX_SEED = 2 ** 31 - 1;
+
 export function readSearchState(params: URLSearchParams): SearchState {
   const mode = params.get('mode') as SearchMode;
-  const int = (key: string, fallback: number) => {
+  const int = (key: string, fallback: number, max: number) => {
     const n = Number.parseInt(params.get(key) ?? '', 10);
-    return Number.isFinite(n) && n > 0 ? n : fallback;
+    return Number.isFinite(n) && n > 0 ? Math.min(n, max) : fallback;
   };
   const seed = Number.parseInt(params.get('seed') ?? '', 10);
   return {
     q: params.get('q') ?? '',
     mode: MODES.includes(mode) ? mode : 'exact',
-    page: int('page', 1),
-    perPage: int('per_page', DEFAULT_PER_PAGE),
+    page: int('page', 1, MAX_PAGE),
+    perPage: int('per_page', DEFAULT_PER_PAGE, MAX_PER_PAGE),
     shuffle: params.get('shuffle') !== '0',
-    seed: Number.isFinite(seed) ? seed : null,
+    // An unusable seed is dropped; a new one is picked and pinned to the URL.
+    seed: Number.isFinite(seed) && seed >= 0 && seed <= MAX_SEED ? seed : null,
     dateFrom: params.get('date_from'),
     dateTo: params.get('date_to'),
     sources: params.getAll('source'),

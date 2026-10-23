@@ -114,6 +114,14 @@ describe('searchState', () => {
   it('falls back to safe defaults', () => {
     expect(readSearchState(new URLSearchParams('mode=evil&page=-4'))).toMatchObject({ mode: 'exact', page: 1, shuffle: true });
   });
+
+  it('clamps values the API would reject', () => {
+    // Old links allowed per_page up to 5000; the API caps it at 500.
+    expect(readSearchState(new URLSearchParams('q=x&per_page=1000&page=99999'))).toMatchObject({ perPage: 500, page: 10_000 });
+    expect(readSearchState(new URLSearchParams('q=x&seed=-1')).seed).toBeNull();
+    expect(readSearchState(new URLSearchParams('q=x&seed=99999999999')).seed).toBeNull();
+    expect(readSearchState(new URLSearchParams('q=x&seed=42')).seed).toBe(42);
+  });
 });
 
 describe('format', () => {

@@ -27,30 +27,264 @@ class SearchTimeout(Exception):
     """The regex scan exceeded REGEX_TIME_BUDGET_S."""
 
 
-def regex_prefilter_tokens(query: str) -> Optional[tuple[list[str], bool]]:
-    """Literal words a user regex needs, for the full-text candidate filter.
+# Clauses of a regex pre-filter: every match contains at least one token of
+# each clause. Kept to a few so the candidate query stays cheap.
+MAX_PREFILTER_CLAUSES = 3
 
-    Returns ``(tokens, any_token)``. Without alternation every match contains
-    all of the tokens, so the first few are ANDed. With alternation a match
-    may contain only one of them, so every token is kept and ORed. Returns
-    None when no token can be relied on and every document must be scanned.
+_WORD_CHAR = None  # compiled lazily: the `regex` module's \w, which covers Hebrew marks
 
-    Shared by both index backends so they pick the same candidate documents.
+
+def regex_prefilter_tokens(query: str) -> Optional[list[list[str]]]:
+    """Literal words every match of a user regex must contain, for the candidate filter.
+
+    Returns clauses in conjunctive form: ``[["שלום", "היי"], ["חברים"]]`` means
+    every match contains (שלום or היי) and חברים. Returns None when no word is
+    guaranteed and every document must be scanned.
+
+    Only mandatory text counts. Optional parts (``?``, ``*``, ``{0,n}``, optional
+    groups), lookarounds, escapes and character classes contribute nothing, and
+    an alternation contributes one OR clause only if every branch guarantees a
+    word. Shared by both index backends so they pick the same candidates.
     """
-    import regex
-
-    # Drop escapes (\b, \s, \d, \.) and character classes so their letters
-    # don't leak into the literal tokens.
-    literal = regex.sub(r'\\.|\[[^\]]*\]', ' ', query)
-    if '|' in literal:
-        # A branch without a usable token (e.g. "foo|.") can match anywhere.
-        if not all(regex.search(r'\w{2,}', branch) for branch in literal.split('|')):
-            return None
-        return regex.findall(r'\w{2,}', literal), True
-    tokens = regex.findall(r'\w{2,}', literal)
-    if not tokens:
+    try:
+        clauses = _RegexPrefilter(query).parse()
+    except _Unsupported:
         return None
-    return tokens[:3], False
+    return clauses[:MAX_PREFILTER_CLAUSES] or None
+
+
+class _Unsupported(Exception):
+    """Syntax the pre-filter doesn't model; fall back to scanning everything."""
+
+
+class _RegexPrefilter:
+    """Recursive-descent walk over Python `regex` syntax, tracking required words.
+
+    The candidate filters match word *prefixes* (FTS5 ``"w"*``, tsquery
+    ``'w':*``), so a word only counts when the pattern starts it after
+    something that can't be a letter: a space, ``\\s``, ``\\b``, punctuation or
+    the start of the pattern. After ``\\d``, a class, ``.`` or a group the text
+    could continue an earlier word, and the prefix search would miss it.
+    The start of the pattern is still trusted, as everywhere else in this
+    index: an unanchored match can begin mid-word, the same limit partial
+    search has until the index can match substrings.
+    """
+
+    def __init__(self, pattern: str):
+        global _WORD_CHAR
+        if _WORD_CHAR is None:
+            import regex
+            _WORD_CHAR = regex.compile(r'\w')
+        self.s = pattern
+        self.i = 0
+
+    def parse(self) -> list[list[str]]:
+        branches = self._alternation(after_word=False)
+        if self.i != len(self.s):
+            raise _Unsupported
+        return self._combine(branches)
+
+    def _alternation(self, after_word: bool) -> list[list[list[str]]]:
+        branches = [self._sequence(after_word)]
+        while self.i < len(self.s) and self.s[self.i] == '|':
+            self.i += 1
+            branches.append(self._sequence(after_word))
+        return branches
+
+    @staticmethod
+    def _combine(branches: list[list[list[str]]]) -> list[list[str]]:
+        if len(branches) == 1:
+            return branches[0]
+        if not all(branches):
+            return []          # some branch guarantees no word: it can match anywhere
+        # One clause per branch, ORed: every match satisfies one branch, and so
+        # contains a token of that branch's clause. Prefer the longest words.
+        chosen = [max(b, key=lambda clause: min(len(t) for t in clause)) for b in branches]
+        return [sorted({t for clause in chosen for t in clause})]
+
+    def _sequence(self, after_word: bool) -> list[list[str]]:
+        """Clauses one alternative guarantees.
+
+        ``after_word`` says whether the text just before this point could be a
+        letter; a word starting there isn't a reliable prefix.
+        """
+        s = self.s
+        clauses: list[list[str]] = []
+        run = ''
+        run_starts_word = False
+
+        def flush():
+            nonlocal run
+            if run_starts_word and len(run) >= 2:
+                clauses.append([run])
+            run = ''
+
+        while self.i < len(s) and s[self.i] not in '|)':
+            c = s[self.i]
+            group: Optional[list[list[str]]] = None
+            literal: Optional[str] = None
+            # Whether the atom can be a letter; None for zero-width atoms.
+            wordish: Optional[bool]
+            if c == '\\':
+                wordish = self._skip_escape()
+            elif c == '[':
+                self._skip_class()
+                wordish = True
+            elif c == '(':
+                group, zero_width = self._group(after_word)
+                wordish = None if zero_width else True
+            elif c in '.^$':
+                self.i += 1
+                wordish = {'.': True, '^': False, '$': None}[c]
+            elif c in '*+?{':
+                raise _Unsupported   # quantifier with nothing to repeat
+            else:
+                literal = c
+                self.i += 1
+                wordish = bool(_WORD_CHAR.match(c))
+
+            qmin, qmax = self._quantifier()
+            if literal is not None and wordish:
+                if qmin == 0:
+                    flush()                  # optional character: the word ends before it
+                else:
+                    if not run:
+                        run_starts_word = not after_word
+                    run += literal
+                    if qmax != 1:
+                        flush()              # repeated: only one copy is certain
+                after_word = True
+            else:
+                flush()
+                if group and qmin >= 1:
+                    clauses.extend(group)
+                if wordish is not None:
+                    # An optional atom may be absent, leaving what came before it.
+                    after_word = (after_word or wordish) if qmin == 0 else wordish
+        flush()
+        return clauses
+
+    def _group(self, after_word: bool) -> tuple[list[list[str]], bool]:
+        """Parse a parenthesised group; return (clauses it guarantees, zero_width)."""
+        s = self.s
+        self.i += 1
+        zero_width = False
+        if s.startswith('?', self.i):
+            head = s[self.i + 1:self.i + 3]
+            if head.startswith('#'):                       # (?#comment)
+                end = s.find(')', self.i)
+                if end < 0:
+                    raise _Unsupported
+                self.i = end + 1
+                return [], True
+            if head[:1] in ('=', '!') or head in ('<=', '<!'):
+                zero_width = True                          # lookaround
+                self.i += 2 if head[:1] in ('=', '!') else 3
+            elif head[:1] in (':', '>', '|'):
+                self.i += 2                                # non-capturing / atomic / branch reset
+            elif head[:1] == 'P' and s.startswith('P<', self.i + 1):
+                self.i = s.index('>', self.i) + 1          # (?P<name>
+            elif head[:1] == '<' or head[:1] == "'":
+                close = '>' if head[:1] == '<' else "'"
+                self.i = s.index(close, self.i + 2) + 1    # (?<name> / (?'name'
+            elif head[:1] == '(':
+                raise _Unsupported                         # conditional group
+            else:
+                # Inline flags: (?i) applies onwards, (?i:...) scopes a group.
+                j = self.i + 1
+                while j < len(s) and (s[j].isalpha() or s[j] == '-'):
+                    j += 1
+                flags = s[self.i + 1:j]
+                if 'x' in flags:
+                    raise _Unsupported                     # verbose mode changes what whitespace means
+                if s.startswith(')', j):
+                    self.i = j + 1
+                    return [], True
+                if not s.startswith(':', j):
+                    raise _Unsupported
+                self.i = j + 1
+        branches = self._alternation(after_word)
+        if not s.startswith(')', self.i):
+            raise _Unsupported
+        self.i += 1
+        return ([] if zero_width else self._combine(branches)), zero_width
+
+    def _quantifier(self) -> tuple[int, Optional[int]]:
+        """Consume a quantifier (and its lazy/possessive suffix); return (min, max)."""
+        s = self.s
+        if self.i >= len(s):
+            return 1, 1
+        c = s[self.i]
+        if c in '*+?':
+            self.i += 1
+            bounds = {'*': (0, None), '+': (1, None), '?': (0, 1)}[c]
+        elif c == '{':
+            end = s.find('}', self.i)
+            body = s[self.i + 1:end] if end > 0 else ''
+            parts = body.split(',')
+            if end < 0 or len(parts) > 2 or not all(p.strip().isdigit() or p.strip() == '' for p in parts):
+                return 1, 1                  # a literal '{', as Python treats it
+            lo = int(parts[0]) if parts[0].strip() else 0
+            hi = (int(parts[-1]) if parts[-1].strip() else None) if len(parts) == 2 else lo
+            self.i = end + 1
+            bounds = (lo, hi)
+        else:
+            return 1, 1
+        if self.i < len(s) and s[self.i] in '?+':
+            self.i += 1                      # lazy or possessive: same bounds
+        return bounds
+
+    def _skip_escape(self) -> Optional[bool]:
+        """Consume an escape; return whether it can be a letter (None if zero-width)."""
+        s = self.s
+        self.i += 1
+        if self.i >= len(s):
+            raise _Unsupported
+        c = s[self.i]
+        self.i += 1
+        if c in 'pPN' and s.startswith('{', self.i):
+            self.i = s.index('}', self.i) + 1
+        elif c == 'g' and s.startswith('<', self.i):
+            self.i = s.index('>', self.i) + 1
+        elif c in 'xuU':
+            if s.startswith('{', self.i):
+                self.i = s.index('}', self.i) + 1
+            else:
+                width = {'x': 2, 'u': 4, 'U': 8}[c]
+                self.i += width
+        elif c.isdigit():
+            while self.i < len(s) and s[self.i].isdigit():
+                self.i += 1
+        if c in 'bA':
+            return False        # word boundary / start: what follows starts a word
+        if c in 'Zz':
+            return None
+        if c in 'sWtnrfvae':
+            return False        # whitespace, non-word and control characters
+        if c.isalnum() or c == '_':
+            return True         # \w \d \S \B, code points, backreferences, properties
+        return False            # an escaped punctuation literal such as \. or \(
+
+    def _skip_class(self):
+        s = self.s
+        j = self.i + 1
+        if s.startswith('^', j):
+            j += 1
+        if s.startswith(']', j):
+            j += 1
+        depth = 1
+        while j < len(s) and depth:
+            if s[j] == '\\':
+                j += 2
+                continue
+            if s[j] == '[':
+                depth += 1                    # nested sets (regex V1)
+            elif s[j] == ']':
+                depth -= 1
+            j += 1
+        if depth:
+            raise _Unsupported
+        self.i = j
 
 
 @dataclass(slots=True)
@@ -315,18 +549,27 @@ class TranscriptIndex:
         """
         fts_query = self._build_fts_query(query, search_mode)
         if fts_query is None:
-            return {"sources": {}, "date_range": {"min": None, "max": None}, "total_docs": 0}
-
-        sql = """
-            SELECT d.source, COUNT(*) as cnt,
-                   MIN(d.episode_date) as min_date,
-                   MAX(d.episode_date) as max_date
-            FROM documents_fts fts
-            JOIN fts_doc_mapping m ON fts.rowid = m.fts_rowid
-            JOIN documents d ON m.doc_id = d.doc_id
-            WHERE documents_fts MATCH ?
-        """
-        params = [fts_query]
+            # No word to narrow on (e.g. \d+): every episode is a candidate,
+            # exactly as the search itself scans them all.
+            sql = """
+                SELECT d.source, COUNT(*) as cnt,
+                       MIN(d.episode_date) as min_date,
+                       MAX(d.episode_date) as max_date
+                FROM documents d
+                WHERE 1=1
+            """
+            params = []
+        else:
+            sql = """
+                SELECT d.source, COUNT(*) as cnt,
+                       MIN(d.episode_date) as min_date,
+                       MAX(d.episode_date) as max_date
+                FROM documents_fts fts
+                JOIN fts_doc_mapping m ON fts.rowid = m.fts_rowid
+                JOIN documents d ON m.doc_id = d.doc_id
+                WHERE documents_fts MATCH ?
+            """
+            params = [fts_query]
 
         if date_from:
             sql += " AND d.episode_date >= ?"
@@ -661,13 +904,14 @@ class TranscriptIndex:
             # Quoted so punctuation (e.g. "ו-929") isn't parsed as FTS5 syntax.
             return ' OR '.join([f'"{t}"*' for t in tokens])
         else:  # regex
-            prefilter = regex_prefilter_tokens(query)
-            if prefilter is None:
+            clauses = regex_prefilter_tokens(query)
+            if clauses is None:
                 return None
-            tokens, any_token = prefilter
-            joiner = ' OR ' if any_token else ' AND '
             # Quoted so a token like "OR" or "NEAR" isn't read as an operator.
-            return joiner.join([f'"{t}"*' for t in tokens])
+            def clause_sql(tokens):
+                terms = [f'"{t}"*' for t in tokens]
+                return terms[0] if len(terms) == 1 else '(' + ' OR '.join(terms) + ')'
+            return ' AND '.join(clause_sql(c) for c in clauses)
 
 
 def _setup_schema(db: DatabaseService):
