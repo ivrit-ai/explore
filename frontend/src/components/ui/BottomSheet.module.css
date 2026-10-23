@@ -1,0 +1,88 @@
+.layer {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: flex-end;
+}
+
+.backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(8, 7, 6, 0.72);
+  animation: fade 200ms var(--ease-out);
+}
+
+.sheet {
+  position: relative;
+  width: 100%;
+  max-height: 92vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--s1);
+  border-top: 1px solid var(--line-2);
+  border-radius: var(--r-md) var(--r-md) 0 0;
+  box-shadow: 0 -24px 60px rgba(0, 0, 0, 0.6);
+  animation: rise 280ms var(--spring);
+  outline: none;
+}
+
+.tall {
+  height: 100vh;
+  height: 100dvh;
+  max-height: none;
+  border-radius: 0;
+  background: var(--bg);
+}
+
+.grabber {
+  align-self: center;
+  width: 36px;
+  height: 4px;
+  margin-top: 8px;
+  border-radius: var(--r-pill);
+  background: var(--line-2);
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 10px 16px;
+}
+
+.title {
+  flex: 1;
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.footer {
+  flex: none;
+  padding: 12px 16px calc(16px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line);
+  background: var(--s1);
+}
+
+@keyframes rise {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: none;
+  }
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+}

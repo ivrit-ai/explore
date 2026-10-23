@@ -1,0 +1,93 @@
+.row {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.track {
+  position: relative;
+  width: 44px;
+  height: 26px;
+  padding: 0;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line-2);
+  background: var(--bg);
+  cursor: pointer;
+  transition: background-color 150ms var(--ease-out);
+}
+
+.knob {
+  position: absolute;
+  top: 2px;
+  inset-inline-start: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--r-pill);
+  background: var(--tx-3);
+  transition:
+    transform 220ms var(--spring),
+    background-color 150ms var(--ease-out);
+}
+
+.track[aria-checked='true'] {
+  background: #cfc8bd;
+  border-color: #cfc8bd;
+}
+
+.track[aria-checked='true'] .knob {
+  background: var(--bg);
+  transform: translateX(-18px);
+}
+
+:global([dir='ltr']) .track[aria-checked='true'] .knob {
+  transform: translateX(18px);
+}
+
+.track:disabled,
+.pill:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  padding: 0 14px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line-2);
+  background: transparent;
+  color: var(--tx-2);
+  font-size: 14px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color 150ms var(--ease-out),
+    color 150ms var(--ease-out);
+}
+
+.pill:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--tx);
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--r-pill);
+  background: var(--line-2);
+}
+
+.pill[aria-checked='true'] {
+  background: var(--tx);
+  border-color: var(--tx);
+  color: var(--bg);
+  font-weight: 600;
+}
+
+.pill[aria-checked='true'] .dot {
+  background: var(--bg);
+}

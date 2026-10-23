@@ -1,0 +1,90 @@
+.row {
+  width: 100%;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 6px;
+  border: none;
+  border-bottom: 1px solid var(--line-soft);
+  background: transparent;
+  color: var(--tx-3);
+  text-align: start;
+  font-size: 14px;
+  cursor: pointer;
+  transition:
+    background-color 150ms var(--ease-out),
+    color 150ms var(--ease-out);
+}
+
+.row:hover {
+  background: #1f1d1a;
+}
+
+.row:active {
+  background: #262420;
+}
+
+.row:focus-visible {
+  outline: 2px solid var(--tx);
+  outline-offset: -2px;
+}
+
+.row[aria-checked='true'] {
+  color: var(--tx);
+}
+
+.box {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-sm);
+  border: 1.5px solid #4a463f;
+  transition:
+    background-color 150ms var(--ease-out),
+    border-color 150ms var(--ease-out);
+}
+
+.row:hover .box {
+  border-color: var(--tx-3);
+}
+
+.row[aria-checked='true'] .box {
+  background: var(--tx);
+  border-color: var(--tx);
+}
+
+.check {
+  fill: none;
+  stroke: var(--bg);
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 16;
+  stroke-dashoffset: 16;
+  transition: stroke-dashoffset 150ms ease-out;
+}
+
+.row[aria-checked='true'] .check {
+  stroke-dashoffset: 0;
+  transition-duration: 180ms;
+}
+
+.name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.count {
+  flex: none;
+  min-width: 32px;
+  text-align: end;
+  font-size: 12px;
+  color: var(--tx-3);
+}

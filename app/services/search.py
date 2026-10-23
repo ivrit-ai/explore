@@ -12,6 +12,9 @@ logger = logging.getLogger(__name__)
 class SearchHit:
     episode_idx: int
     char_offset: int
+    # Offsets are into the document's full text; group spans are (-1, -1) when unmatched.
+    end_offset: int = -1
+    groups: tuple = ()
 
 
 class SearchService:
@@ -53,12 +56,22 @@ class SearchService:
                                     date_to=date_to, sources=sources,
                                     doc_limit=doc_limit, doc_offset=doc_offset,
                                     seed=seed)
-        hits = [SearchHit(episode_idx, char_offset) for episode_idx, char_offset in hits_data]
+        hits = [SearchHit(episode_idx, start, end, groups) for episode_idx, start, end, groups in hits_data]
 
         total_time = time.perf_counter() - start_time
         logger.info(f"Search completed in {total_time*1000:.2f}ms. "
                    f"Found {len(hits)} hits with mode '{search_mode}', has_more={has_more}")
         return hits, has_more
+
+    def metadata(self, query: str, search_mode: str, date_from: str = None,
+                 date_to: str = None, sources: List[str] = None) -> dict:
+        """Source counts and date range for every document matching the query.
+
+        The index builds its own backend-specific match expression and raises
+        InvalidQuery for input its engine rejects.
+        """
+        idx = self._index_mgr.get()
+        return idx.get_search_metadata(query, search_mode, date_from, date_to, sources)
 
     def segment(self, hit: SearchHit) -> Segment:
         """Return the segment that contains this hit."""

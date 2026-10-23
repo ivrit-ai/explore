@@ -1,0 +1,24 @@
+.wave {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 3px;
+}
+
+.bar {
+  width: 3px;
+  height: 100%;
+  border-radius: 1px;
+  background: currentColor;
+  transform-origin: 50% 100%;
+  animation: eq 900ms ease-in-out infinite;
+}
+
+@keyframes eq {
+  0%,
+  100% {
+    transform: scaleY(0.3);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}

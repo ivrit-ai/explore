@@ -21,7 +21,11 @@ from __future__ import annotations
 import logging
 import os
 import time
+from contextlib import contextmanager
 from typing import Iterable, Optional, Sequence
+
+from . import index as _sqlite_index
+from .index import InvalidQuery, SearchTimeout, regex_prefilter_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -34,8 +38,12 @@ _FTS_CONFIG = "simple"   # no stemming, no stopwords — closest to FTS5 unicode
 
 
 def _quote_lexeme(token: str) -> str:
-    """Quote a token for use inside a tsquery literal."""
-    return "'" + token.replace("'", "''") + "'"
+    """Quote a token for use inside a tsquery literal.
+
+    Backslash is the escape character inside a quoted lexeme, so it is doubled
+    too; otherwise a trailing backslash swallows the closing quote.
+    """
+    return "'" + token.replace("\\", "\\\\").replace("'", "''") + "'"
 
 
 # Metacharacters of Postgres' Advanced Regular Expressions.
@@ -103,8 +111,6 @@ def build_tsquery(query: str, search_mode: str) -> tuple[Optional[str], Optional
     enough to keep real positions; see ``_match_clause`` for how the long ones
     are handled.
     """
-    import regex
-
     if search_mode == "exact":
         if not query.split():
             return None, None
@@ -117,10 +123,14 @@ def build_tsquery(query: str, search_mode: str) -> tuple[Optional[str], Optional
         return "to_tsquery", " | ".join(f"{_quote_lexeme(t)}:*" for t in tokens)
 
     if search_mode == "regex":
-        tokens = regex.findall(r"\w{2,}", query)
-        if not tokens:
+        # Same token choice as the sqlite backend: escapes and character
+        # classes don't contribute letters, and alternation ORs every token.
+        prefilter = regex_prefilter_tokens(query)
+        if prefilter is None:
             return None, None
-        return "to_tsquery", " & ".join(f"{_quote_lexeme(t)}:*" for t in tokens[:3])
+        tokens, any_token = prefilter
+        joiner = " | " if any_token else " & "
+        return "to_tsquery", joiner.join(f"{_quote_lexeme(t)}:*" for t in tokens)
 
     raise ValueError(f"Unknown search mode: {search_mode}")
 
@@ -155,6 +165,21 @@ class PostgresTranscriptIndex:
             with conn.cursor() as cur:
                 cur.execute(sql, params)
                 return cur.fetchone()
+
+    @staticmethod
+    @contextmanager
+    def _search_errors():
+        """Map Postgres failures caused by the user's query onto the
+        backend-neutral InvalidQuery / SearchTimeout the routes translate."""
+        import psycopg
+
+        try:
+            yield
+        except psycopg.errors.QueryCanceled as exc:      # statement_timeout
+            raise SearchTimeout(str(exc)) from exc
+        except (psycopg.errors.SyntaxError, psycopg.DataError) as exc:
+            # tsquery syntax, invalid regular expression and the like.
+            raise InvalidQuery(str(exc)) from exc
 
     def _match_clause(self, query: str, search_mode: str) -> tuple[Optional[str], list]:
         """Build the tsvector WHERE fragment and its parameters.
@@ -240,6 +265,16 @@ class PostgresTranscriptIndex:
             [list(set(doc_ids))],
         )
         return {row[0]: _doc_dict(row) for row in rows}
+
+    def get_durations(self, doc_ids: list[int]) -> dict[int, float]:
+        """Episode length in seconds (end of the last segment), keyed by doc_id."""
+        if not doc_ids:
+            return {}
+        rows = self._query(
+            "SELECT doc_id, MAX(end_time) FROM segments WHERE doc_id = ANY(%s) GROUP BY doc_id",
+            [list(set(doc_ids))],
+        )
+        return {doc_id: float(duration or 0.0) for doc_id, duration in rows}
 
     # ── segment reads ───────────────────────────────────────────────────
     def get_segments_for_document(self, doc_id: int) -> list[dict]:
@@ -336,7 +371,9 @@ class PostgresTranscriptIndex:
         sources_dict: dict[str, int] = {}
         global_min = global_max = None
         total_docs = 0
-        for source, cnt, min_date, max_date in self._query(sql, params):
+        with self._search_errors():
+            rows = self._query(sql, params)
+        for source, cnt, min_date, max_date in rows:
             if source:
                 sources_dict[source] = cnt
             total_docs += cnt
@@ -355,8 +392,16 @@ class PostgresTranscriptIndex:
                     date_from: Optional[str] = None, date_to: Optional[str] = None,
                     sources: Optional[list[str]] = None,
                     doc_limit: int = 0, doc_offset: int = 0,
-                    seed: Optional[int] = None) -> tuple[list[tuple[int, int]], bool]:
-        """Candidate docs from the GIN index, then a regex pass for exact offsets."""
+                    seed: Optional[int] = None) -> tuple[list[tuple[int, int, int, tuple]], bool]:
+        """Candidate docs from the GIN index, then a regex pass for exact offsets.
+
+        Each hit is ``(doc_id, start, end, group_spans)`` with offsets into the
+        document's full text, the same shape the sqlite backend returns. Group
+        spans are only produced for regex mode; an unmatched group is (-1, -1).
+
+        Raises InvalidQuery for a query the engine rejects and SearchTimeout
+        when the regex scan (or the statement timeout) runs out.
+        """
         import random as random_mod
 
         if search_mode not in ("exact", "partial", "regex"):
@@ -384,7 +429,8 @@ class PostgresTranscriptIndex:
                 params.append(doc_offset)
 
         t_ids = time.perf_counter()
-        doc_ids = [r[0] for r in self._query(sql, params)]
+        with self._search_errors():
+            doc_ids = [r[0] for r in self._query(sql, params)]
         t_ids_done = time.perf_counter()
         logger.info("[BENCH] doc_ids: %.1fms, %d ids", (t_ids_done - t_ids) * 1000, len(doc_ids))
 
@@ -411,12 +457,11 @@ class PostgresTranscriptIndex:
         # ── 3. find exact hit offsets ───────────────────────────────────
         t_scan = time.perf_counter()
         if search_mode in SERVER_SIDE_MODES:
-            hits = self._offsets_in_db(query, search_mode, page_ids)
+            with self._search_errors():
+                hits = self._offsets_in_db(query, search_mode, page_ids)
             where = "db"
         else:
             hits = self._offsets_in_python(query, page_ids)
-            if hits is None:
-                return [], False
             where = "python"
         t_scan_done = time.perf_counter()
 
@@ -430,8 +475,12 @@ class PostgresTranscriptIndex:
         return hits, has_more
 
     def _offsets_in_db(self, query: str, search_mode: str,
-                       page_ids: Sequence[int]) -> list[tuple[int, int]]:
-        """Hit offsets computed by Postgres; no transcript text crosses the wire."""
+                       page_ids: Sequence[int]) -> list[tuple[int, int, int, tuple]]:
+        """Hit offsets computed by Postgres; no transcript text crosses the wire.
+
+        Both server-side modes match the literal query, so every hit spans
+        exactly len(query) code points and has no groups.
+        """
         rows = self._query(
             _OFFSETS_SQL,
             [match_pattern(query, search_mode), list(page_ids), len(query)],
@@ -440,33 +489,48 @@ class PostgresTranscriptIndex:
         for doc_id, offset in rows:
             by_doc.setdefault(doc_id, []).append(offset)
         # Emit in page order, which shuffle mode relies on.
-        return [(doc_id, off) for doc_id in page_ids for off in by_doc.get(doc_id, ())]
+        n = len(query)
+        return [(doc_id, off, off + n, ()) for doc_id in page_ids for off in by_doc.get(doc_id, ())]
 
     def _offsets_in_python(self, query: str,
-                           page_ids: Sequence[int]) -> Optional[list[tuple[int, int]]]:
+                           page_ids: Sequence[int]) -> list[tuple[int, int, int, tuple]]:
         """Fallback for user-supplied regexes, chunked to bound peak memory.
 
-        Returns None when the pattern will not compile.
+        Raises InvalidQuery when the pattern will not compile and SearchTimeout
+        when the whole scan exceeds REGEX_TIME_BUDGET_S (user regexes can
+        backtrack catastrophically). Time spent fetching text counts too.
         """
         import regex
 
         try:
             compiled = regex.compile(query)
         except regex.error as exc:
-            logger.error("Invalid regex pattern %r: %s", query, exc)
-            return None
+            logger.warning("Invalid regex pattern %r: %s", query, exc)
+            raise InvalidQuery(str(exc)) from exc
 
-        hits: list[tuple[int, int]] = []
-        for chunk in _chunks(list(page_ids), _TEXT_CHUNK):
-            texts = dict(self._query(
-                "SELECT doc_id, full_text FROM documents WHERE doc_id = ANY(%s)", [list(chunk)]
-            ))
-            for doc_id in chunk:
-                full_text = texts.get(doc_id)
-                if full_text is None:
-                    continue
-                hits.extend((doc_id, m.start()) for m in compiled.finditer(full_text))
-            texts.clear()
+        group_ids = range(1, compiled.groups + 1)
+        # Read at call time so tests (and operators) can tune the shared budget.
+        deadline = time.monotonic() + _sqlite_index.REGEX_TIME_BUDGET_S
+        hits: list[tuple[int, int, int, tuple]] = []
+        try:
+            for chunk in _chunks(list(page_ids), _TEXT_CHUNK):
+                texts = dict(self._query(
+                    "SELECT doc_id, full_text FROM documents WHERE doc_id = ANY(%s)", [list(chunk)]
+                ))
+                for doc_id in chunk:
+                    full_text = texts.get(doc_id)
+                    if full_text is None:
+                        continue
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError
+                    for m in compiled.finditer(full_text, timeout=remaining):
+                        hits.append((doc_id, m.start(), m.end(),
+                                     tuple(m.span(i) for i in group_ids)))
+                texts.clear()
+        except TimeoutError as exc:
+            logger.warning("Regex scan timed out: %r", query)
+            raise SearchTimeout(query) from exc
         return hits
 
 

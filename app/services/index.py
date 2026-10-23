@@ -9,10 +9,48 @@ from tqdm.auto import tqdm
 import itertools
 from datetime import datetime
 import re
+import sqlite3
 import uuid
 
 from ..utils import FileRecord
 from .db import DatabaseService, SQLITE_MAX_PARAMS
+
+# Upper bound on the regex post-filter scan for one search page.
+REGEX_TIME_BUDGET_S = 5.0
+
+
+class InvalidQuery(ValueError):
+    """The user's query can't be compiled (bad regex or FTS syntax)."""
+
+
+class SearchTimeout(Exception):
+    """The regex scan exceeded REGEX_TIME_BUDGET_S."""
+
+
+def regex_prefilter_tokens(query: str) -> Optional[tuple[list[str], bool]]:
+    """Literal words a user regex needs, for the full-text candidate filter.
+
+    Returns ``(tokens, any_token)``. Without alternation every match contains
+    all of the tokens, so the first few are ANDed. With alternation a match
+    may contain only one of them, so every token is kept and ORed. Returns
+    None when no token can be relied on and every document must be scanned.
+
+    Shared by both index backends so they pick the same candidate documents.
+    """
+    import regex
+
+    # Drop escapes (\b, \s, \d, \.) and character classes so their letters
+    # don't leak into the literal tokens.
+    literal = regex.sub(r'\\.|\[[^\]]*\]', ' ', query)
+    if '|' in literal:
+        # A branch without a usable token (e.g. "foo|.") can match anywhere.
+        if not all(regex.search(r'\w{2,}', branch) for branch in literal.split('|')):
+            return None
+        return regex.findall(r'\w{2,}', literal), True
+    tokens = regex.findall(r'\w{2,}', literal)
+    if not tokens:
+        return None
+    return tokens[:3], False
 
 
 @dataclass(slots=True)
@@ -249,6 +287,21 @@ class TranscriptIndex:
 
         return result
 
+    def get_durations(self, doc_ids: list[int]) -> dict[int, float]:
+        """Episode length in seconds (end of the last segment), keyed by doc_id."""
+        result = {}
+        unique_ids = list(set(doc_ids))
+        for i in range(0, len(unique_ids), SQLITE_MAX_PARAMS):
+            batch = unique_ids[i:i + SQLITE_MAX_PARAMS]
+            placeholders = ','.join('?' * len(batch))
+            cursor = self._db.execute(
+                f"SELECT doc_id, MAX(end_time) FROM segments WHERE doc_id IN ({placeholders}) GROUP BY doc_id",
+                batch,
+            )
+            for doc_id, duration in cursor:
+                result[doc_id] = duration or 0.0
+        return result
+
     def get_search_metadata(self, query: str, search_mode: str = 'partial',
                            date_from: Optional[str] = None,
                            date_to: Optional[str] = None,
@@ -288,7 +341,10 @@ class TranscriptIndex:
 
         sql += " GROUP BY d.source"
 
-        cursor = self._db.execute(sql, params)
+        try:
+            cursor = self._db.execute(sql, params)
+        except sqlite3.OperationalError as e:
+            raise InvalidQuery(str(e)) from e
 
         sources_dict = {}
         global_min = None
@@ -327,8 +383,8 @@ class TranscriptIndex:
     def search_hits(self, query: str, search_mode: str = 'partial', date_from: Optional[str] = None,
                    date_to: Optional[str] = None, sources: Optional[list[str]] = None,
                    doc_limit: int = 0, doc_offset: int = 0,
-                   seed: Optional[int] = None) -> tuple[list[tuple[int, int]], bool]:
-        """Search for query and return (episode_idx, char_offset) pairs for hits.
+                   seed: Optional[int] = None) -> tuple[list[tuple[int, int, int, tuple]], bool]:
+        """Search for query and return (episode_idx, start, end, group_spans) per hit.
 
         Args:
             query: Search query string
@@ -423,7 +479,7 @@ class TranscriptIndex:
                      date_from: Optional[str] = None, date_to: Optional[str] = None,
                      sources: Optional[list[str]] = None,
                      doc_limit: int = 0, doc_offset: int = 0,
-                     seed: Optional[int] = None) -> tuple[list[tuple[int, int]], bool]:
+                     seed: Optional[int] = None) -> tuple[list[tuple[int, int, int, tuple]], bool]:
         """Unified FTS5 search pipeline.
 
         All search modes (exact/partial/regex) and shuffle follow the same flow:
@@ -484,8 +540,12 @@ class TranscriptIndex:
                 params.append(doc_offset)
 
         t_ids = time.perf_counter()
-        cursor = self._db.execute(sql, params)
-        doc_ids = [row[0] for row in cursor]
+        try:
+            cursor = self._db.execute(sql, params)
+            doc_ids = [row[0] for row in cursor]
+        except sqlite3.OperationalError as e:
+            # FTS5 rejects some user input (e.g. stray operators) as syntax errors.
+            raise InvalidQuery(str(e)) from e
         t_ids_done = time.perf_counter()
         log.info(f"[BENCH] doc_ids: {((t_ids_done-t_ids)*1000):.1f}ms, {len(doc_ids)} ids")
 
@@ -538,17 +598,30 @@ class TranscriptIndex:
         try:
             compiled = regex.compile(pattern)
         except regex.error as e:
-            log.error(f"Invalid regex pattern: {query}, error: {e}")
-            return [], False
+            log.warning(f"Invalid regex pattern: {query}, error: {e}")
+            raise InvalidQuery(str(e)) from e
 
+        # Each hit: (doc_id, start, end, group spans). A group that did not
+        # participate in the match has span (-1, -1).
         hits = []
+        group_ids = range(1, compiled.groups + 1)
         t_scan = time.perf_counter()
-        for doc_id in page_ids:
-            full_text = docs.get(doc_id)
-            if full_text is None:
-                continue
-            for match in compiled.finditer(full_text):
-                hits.append((doc_id, match.start()))
+        # User regexes can backtrack catastrophically; bound the whole scan.
+        deadline = time.monotonic() + REGEX_TIME_BUDGET_S
+        try:
+            for doc_id in page_ids:
+                full_text = docs.get(doc_id)
+                if full_text is None:
+                    continue
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError
+                for match in compiled.finditer(full_text, timeout=remaining):
+                    hits.append((doc_id, match.start(), match.end(),
+                                 tuple(match.span(i) for i in group_ids)))
+        except TimeoutError as e:
+            log.warning(f"Regex scan timed out: {query}")
+            raise SearchTimeout(query) from e
         t_scan_done = time.perf_counter()
 
         log.info(f"[BENCH] {search_mode}{' shuffle' if seed is not None else ''}: "
@@ -585,12 +658,16 @@ class TranscriptIndex:
         elif search_mode == 'partial':
             escaped = query.replace('"', '""')
             tokens = escaped.split()
-            return ' OR '.join([f'{t}*' for t in tokens])
+            # Quoted so punctuation (e.g. "ו-929") isn't parsed as FTS5 syntax.
+            return ' OR '.join([f'"{t}"*' for t in tokens])
         else:  # regex
-            potential_tokens = regex.findall(r'\w{2,}', query)
-            if potential_tokens:
-                return ' AND '.join([f'{t}*' for t in potential_tokens[:3]])
-            return None
+            prefilter = regex_prefilter_tokens(query)
+            if prefilter is None:
+                return None
+            tokens, any_token = prefilter
+            joiner = ' OR ' if any_token else ' AND '
+            # Quoted so a token like "OR" or "NEAR" isn't read as an operator.
+            return joiner.join([f'"{t}"*' for t in tokens])
 
 
 def _setup_schema(db: DatabaseService):

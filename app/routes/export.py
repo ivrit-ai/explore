@@ -1,6 +1,8 @@
 from fastapi import APIRouter, Request, Query, Depends, HTTPException
 from starlette.responses import StreamingResponse
-from ..routes.auth import require_login
+from ..routes.auth import require_api_login
+from ..services.index import InvalidQuery, SearchTimeout
+from .params import SearchFilters, search_filters
 import io
 import csv
 import subprocess
@@ -8,12 +10,13 @@ import logging
 import time
 import re
 import unicodedata
+import uuid as uuid_module
 from datetime import datetime
 from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+router = APIRouter(prefix="/api/export")
 
 def _content_disposition(filename: str) -> str:
     """Build a Content-Disposition value that survives non-ASCII filenames.
@@ -31,124 +34,89 @@ def _content_disposition(filename: str) -> str:
 # Context segment configuration for CSV exports
 DEFAULT_CONTEXT_SEGMENTS_LENGTH = 5
 
+# Longest audio clip a user can export in one request.
+MAX_CLIP_SECONDS = 600
+FFMPEG_TIMEOUT_S = 60
 
-@router.get('/export/results', name='export.export_results_csv')
+
+@router.get('/csv', name='export.export_results_csv')
 def export_results_csv(
     request: Request,
-    q: str = Query(''),
-    search_mode: str = Query('exact'),
-    date_from: str = Query(''),
-    date_to: str = Query(''),
-    sources: str = Query(''),
-    user_email: str = Depends(require_login),
+    filters: SearchFilters = Depends(search_filters),
+    user_email: str = Depends(require_api_login),
 ):
     start_time = time.time()
 
     search_service = request.app.state.search_service
+    query = filters.q
 
-    query = q.strip()
-    if not query:
-        raise HTTPException(status_code=400, detail="Missing query parameter")
+    logger.info(f"Performing search for CSV export: {query} (mode: {filters.mode}, filters: date_from={filters.date_from}, date_to={filters.date_to}, sources={filters.sources})")
+    try:
+        hits, _ = search_service.search(query, search_mode=filters.mode,
+                                        date_from=filters.date_from, date_to=filters.date_to,
+                                        sources=filters.sources)
+    except InvalidQuery:
+        raise HTTPException(status_code=400, detail="לא ניתן לחפש את הביטוי הזה")
+    except SearchTimeout:
+        raise HTTPException(status_code=422, detail="הביטוי מורכב מדי והחיפוש נעצר. נסו ביטוי פשוט יותר.")
 
-    # Validate search mode
-    if search_mode not in ['exact', 'partial', 'regex']:
-        search_mode = 'exact'
-
-    # Get filter parameters
-    date_from_val = date_from.strip() or None
-    date_to_val = date_to.strip() or None
-    sources_param = sources.strip()
-    sources_list = [s.strip() for s in sources_param.split(',') if s.strip()] if sources_param else None
-
-    # Perform search with filters
-    logger.info(f"Performing search for CSV export: {query} (mode: {search_mode}, filters: date_from={date_from_val}, date_to={date_to_val}, sources={sources_list})")
-    hits, _ = search_service.search(query, search_mode=search_mode,
-                                 date_from=date_from_val, date_to=date_to_val, sources=sources_list)
-
-    # Enrich hits with segment info
-    all_results = []
     index = search_service._index_mgr.get()
 
-    # Build a set of all segments we need (target + context)
-    segments_to_fetch = []
-    hit_to_segments_map = {}
-
-    for i, hit in enumerate(hits):
-        seg = search_service.segment(hit)
-        context_indices = []
+    # Target segment per hit, then one batch fetch for target + context segments
+    targets = index.get_segments_at_offsets([(h.episode_idx, h.char_offset) for h in hits])
+    segments_to_fetch = set()
+    for h in hits:
+        target = targets.get((h.episode_idx, h.char_offset))
+        if not target:
+            continue
+        seg_idx = target["segment_id"]
         for offset in range(-DEFAULT_CONTEXT_SEGMENTS_LENGTH, DEFAULT_CONTEXT_SEGMENTS_LENGTH + 1):
-            context_idx = seg.seg_idx + offset
-            if context_idx >= 0:
-                segments_to_fetch.append((hit.episode_idx, context_idx))
-                context_indices.append(context_idx)
+            if seg_idx + offset >= 0:
+                segments_to_fetch.add((h.episode_idx, seg_idx + offset))
 
-        hit_to_segments_map[i] = {
-            'episode_idx': hit.episode_idx,
-            'target_seg_idx': seg.seg_idx,
-            'context_indices': context_indices
-        }
+    # get_segments_by_ids returns an unordered list; key it explicitly.
+    segment_map = {(s["doc_id"], s["segment_id"]): s for s in index.get_segments_by_ids(list(segments_to_fetch))}
+    docs = index.get_documents_batch(list({h.episode_idx for h in hits}))
 
-    # Batch fetch all segments
-    fetched_segments = index.get_segments_by_ids(segments_to_fetch)
-
-    # Create a lookup map for quick access
-    segment_map = {}
-    for (ep_idx, seg_idx), seg_data in zip(segments_to_fetch, fetched_segments):
-        key = f"{ep_idx}|{seg_idx}"
-        segment_map[key] = seg_data
-
-    # Build results with context
-    for i, hit in enumerate(hits):
-        hit_info = hit_to_segments_map[i]
-        episode_idx = hit_info['episode_idx']
-        target_seg_idx = hit_info['target_seg_idx']
-
-        target_key = f"{episode_idx}|{target_seg_idx}"
-        target_seg = segment_map.get(target_key, {})
-
+    all_results = []
+    for h in hits:
+        target = targets.get((h.episode_idx, h.char_offset))
+        if not target:
+            continue
+        seg_idx = target["segment_id"]
         context_parts = []
-        for ctx_idx in hit_info['context_indices']:
-            ctx_key = f"{episode_idx}|{ctx_idx}"
-            ctx_seg = segment_map.get(ctx_key)
+        for ctx_idx in range(seg_idx - DEFAULT_CONTEXT_SEGMENTS_LENGTH, seg_idx + DEFAULT_CONTEXT_SEGMENTS_LENGTH + 1):
+            ctx_seg = segment_map.get((h.episode_idx, ctx_idx))
             if ctx_seg and ctx_seg.get('text'):
                 context_parts.append(ctx_seg['text'])
 
-        context_text = ' '.join(context_parts)
-
-        doc_info = index.get_document_info(episode_idx)
-        source_str = doc_info.get("source", "")
-        episode_title = doc_info.get("episode_title", "")
-        date = doc_info.get("episode_date", "")
-        podcast_title = source_str
-
+        doc_info = docs.get(h.episode_idx, {})
         all_results.append({
-            "source": source_str,
-            "episode_idx": episode_idx,
-            "podcast_title": podcast_title,
-            "date": date,
-            "episode_title": episode_title,
-            "segment_idx": target_seg_idx,
-            "start": target_seg.get('start_time', ''),
-            "end": target_seg.get('end_time', ''),
-            "text": target_seg.get('text', ''),
-            "context": context_text
+            "episode_idx": h.episode_idx,
+            "podcast_title": doc_info.get("source", ""),
+            "date": doc_info.get("episode_date", ""),
+            "episode_title": doc_info.get("episode_title", ""),
+            "start": target.get('start_time', ''),
+            "end": target.get('end_time', ''),
+            "text": target.get('text', ''),
+            "context": ' '.join(context_parts),
         })
 
     # Create CSV in memory with UTF-8 BOM for Excel compatibility
     output = io.StringIO()
-    output.write('\ufeff')  # UTF-8 BOM
+    output.write('﻿')  # UTF-8 BOM
     writer = csv.writer(output, dialect='excel')
 
     # Write metadata as comments (info rows)
     writer.writerow(['# ivrit.ai Explore - Search Results Export'])
     writer.writerow(['# Query:', query])
-    writer.writerow(['# Search Mode:', search_mode])
-    if date_from_val:
-        writer.writerow(['# Date From:', date_from_val])
-    if date_to_val:
-        writer.writerow(['# Date To:', date_to_val])
-    if sources_list:
-        writer.writerow(['# Sources Filter:', ', '.join(sources_list)])
+    writer.writerow(['# Search Mode:', filters.mode])
+    if filters.date_from:
+        writer.writerow(['# Date From:', filters.date_from])
+    if filters.date_to:
+        writer.writerow(['# Date To:', filters.date_to])
+    if filters.sources:
+        writer.writerow(['# Sources Filter:', ', '.join(filters.sources)])
     writer.writerow(['# Total Results:', len(all_results)])
     writer.writerow(['# Exported:', datetime.now().strftime('%Y-%m-%d %H:%M:%S')])
     writer.writerow([])
@@ -159,22 +127,19 @@ def export_results_csv(
     ])
 
     for r in all_results:
-        text = r.get('text', '').encode('utf-8', errors='replace').decode('utf-8')
-        context = r.get('context', '').encode('utf-8', errors='replace').decode('utf-8')
         writer.writerow([
-            r.get('episode_idx', ''),
-            r.get('date', ''),
-            r.get('podcast_title', ''),
-            r.get('episode_title', ''),
-            text,
-            context,
-            r.get('start', ''),
-            r.get('end', '')
+            r['episode_idx'],
+            r['date'],
+            r['podcast_title'],
+            r['episode_title'],
+            r['text'],
+            r['context'],
+            r['start'],
+            r['end'],
         ])
 
     execution_time = (time.time() - start_time) * 1000
 
-    # Track export analytics
     analytics = request.app.state.analytics
     if analytics:
         analytics.capture_export(
@@ -185,85 +150,99 @@ def export_results_csv(
             user_email=user_email,
         )
 
-    # Create safe filename
+    # ASCII-only filename; the query itself stays inside the file.
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    safe_query = re.sub(r'[^\w\s-]', '', query)[:50]
-    safe_query = re.sub(r'[-\s]+', '_', safe_query)
-    filename = f'ivrit_explore_{safe_query}_{timestamp}.csv' if safe_query else f'ivrit_explore_{timestamp}.csv'
-
-    csv_bytes = output.getvalue().encode('utf-8')
+    filename = f'ivrit_explore_{timestamp}.csv'
 
     return StreamingResponse(
-        io.BytesIO(csv_bytes),
+        io.BytesIO(output.getvalue().encode('utf-8')),
         media_type='text/csv; charset=utf-8',
         headers={'Content-Disposition': _content_disposition(filename)},
     )
 
 
-def _transcode(audio_input: str, start: float, end: float):
-    """Run ffmpeg over a path or URL, returning (stdout, stderr, returncode)."""
+def _transcode(audio_input: str, start: float, end: float) -> subprocess.CompletedProcess:
+    """Cut [start, end) out of a path or URL as 64kbps MP3 on stdout.
+
+    Raises subprocess.TimeoutExpired after FFMPEG_TIMEOUT_S.
+    """
     cmd = [
-        'ffmpeg', '-y',
+        'ffmpeg', '-nostdin', '-y',
+        '-ss', f'{start:.3f}',
+        '-to', f'{end:.3f}',
         '-i', audio_input,
-        '-ss', str(start),
-        '-to', str(end),
         '-acodec', 'libmp3lame',
         '-ab', '64k',
         '-f', 'mp3',
         '-'
     ]
-    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    output_data, error = process.communicate()
-    return output_data, error, process.returncode
+    return subprocess.run(cmd, capture_output=True, timeout=FFMPEG_TIMEOUT_S)
 
 
-@router.get('/export/segment/{source}/{filename:path}', name='export.export_segment')
-def export_segment(
+@router.get('/audio/{doc_uuid}', name='export.export_audio')
+def export_audio(
     request: Request,
-    source: str,
-    filename: str,
-    start: float = Query(0),
-    end: float = Query(0),
+    doc_uuid: str,
+    start: float = Query(..., ge=0),
+    end: float = Query(..., gt=0),
+    user_email: str = Depends(require_api_login),
 ):
+    """Cut [start, end) out of an episode's audio and return it as MP3."""
+    try:
+        uuid_module.UUID(doc_uuid)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid UUID")
     if end <= start:
         raise HTTPException(status_code=400, detail="End time must be greater than start time")
+    if end - start > MAX_CLIP_SECONDS:
+        raise HTTPException(status_code=400, detail=f"Clips are limited to {MAX_CLIP_SECONDS} seconds")
 
-    episode = f'{source}/{filename}'
-
+    index = request.app.state.search_service._index_mgr.get()
     try:
-        logger.info(f"Exporting segment: {episode}")
-        store = request.app.state.audio_store
+        episode_path = index.get_episode_by_uuid(doc_uuid)
+    except IndexError:
+        raise HTTPException(status_code=404, detail="Episode not found")
 
+    # Audio comes from the configured backend (local directory or S3); the
+    # store rejects traversal in the episode key itself.
+    store = request.app.state.audio_store
+    try:
         try:
-            with store.ffmpeg_input(episode) as audio_input:
-                output_data, error, returncode = _transcode(audio_input, start, end)
+            with store.ffmpeg_input(episode_path) as audio_input:
+                proc = _transcode(audio_input, start, end)
         except FileNotFoundError:
-            raise HTTPException(status_code=404, detail="Source not found")
+            raise HTTPException(status_code=404, detail="Audio not found")
 
-        if returncode != 0 and store.is_remote:
+        if proc.returncode != 0 and store.is_remote:
             # A remote backend hands ffmpeg a URL, which needs an ffmpeg built
             # with HTTPS support. Fall back to a local copy before giving up.
-            logger.warning(f"FFmpeg failed on primary input for {episode}: {error.decode(errors='replace')}")
+            logger.warning(f"FFmpeg failed on remote input for {doc_uuid}: "
+                           f"{proc.stderr.decode(errors='replace')[-2000:]}")
             try:
-                with store.local_copy(episode) as audio_path:
-                    output_data, error, returncode = _transcode(audio_path, start, end)
+                with store.local_copy(episode_path) as audio_path:
+                    proc = _transcode(audio_path, start, end)
             except FileNotFoundError:
-                raise HTTPException(status_code=404, detail="Source not found")
+                raise HTTPException(status_code=404, detail="Audio not found")
+    except subprocess.TimeoutExpired:
+        logger.error(f"FFmpeg timed out exporting {doc_uuid} [{start}-{end}]")
+        raise HTTPException(status_code=504, detail="Audio export timed out")
+    if proc.returncode != 0:
+        logger.error(f"FFmpeg error for {doc_uuid}: {proc.stderr.decode(errors='replace')[-2000:]}")
+        raise HTTPException(status_code=500, detail="Error processing audio")
 
-        if returncode != 0:
-            logger.error(f"FFmpeg error: {error.decode(errors='replace')}")
-            raise HTTPException(status_code=500, detail="Error processing audio")
-
-        download_name = f'{source}_{filename}_{start:.2f}-{end:.2f}.mp3'
-
-        return StreamingResponse(
-            io.BytesIO(output_data),
-            media_type='audio/mpeg',
-            headers={'Content-Disposition': _content_disposition(download_name)},
+    analytics = request.app.state.analytics
+    if analytics:
+        analytics.capture_export(
+            export_type='audio',
+            query=doc_uuid,
+            execution_time_ms=0,
+            url=str(request.url),
+            user_email=user_email,
         )
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error exporting segment: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+    download_name = f'ivrit_{doc_uuid[:8]}_{start:.1f}-{end:.1f}.mp3'
+    return StreamingResponse(
+        io.BytesIO(proc.stdout),
+        media_type='audio/mpeg',
+        headers={'Content-Disposition': _content_disposition(download_name)},
+    )

@@ -1,0 +1,58 @@
+:root {
+  color-scheme: dark;
+
+  /* Surfaces: warm off-black, separated by hairlines and small tonal steps */
+  --bg: #121110;
+  --s1: #191816;
+  --s2: #201e1b;
+  --s3: #2e2b27;
+  --hover: #24221f;
+  --press: #2d2a26;
+  --line: #2b2925;
+  --line-2: #3a3732;
+  --line-soft: #24221f;
+
+  /* Text */
+  --tx: #eeeae4;
+  --tx-2: #b8b1a7;
+  --tx-3: #8e877d;
+  --tx-off: #6e685f;
+
+  /* The one accent: primary action, live playhead, search matches */
+  --accent: #8ccbf7;
+  --accent-hi: #a1d4f8;
+  --accent-ink: #071624;
+  --accent-tint: rgba(140, 203, 247, 0.16);
+  --accent-glow: rgba(140, 203, 247, 0.7);
+  --match-ink: #ddf0ff;
+
+  /* Regex capture groups: muted tints, always paired with a group number */
+  --g1-bg: rgba(232, 108, 80, 0.18);
+  --g1-line: #e86c50;
+  --g1-ink: #f6cdbf;
+  --g2-bg: rgba(201, 163, 92, 0.18);
+  --g2-line: #c9a35c;
+  --g2-ink: #ebddbd;
+  --g3-bg: rgba(126, 170, 140, 0.18);
+  --g3-line: #7eaa8c;
+  --g3-ink: #cfe3d4;
+  --g4-bg: rgba(150, 140, 200, 0.2);
+  --g4-line: #968cc8;
+  --g4-ink: #dad5f0;
+
+  --danger: #e86c50;
+
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-pill: 999px;
+
+  --font-ui: 'IBM Plex Sans Hebrew', system-ui, sans-serif;
+  --font-serif: 'Frank Ruhl Libre', 'IBM Plex Sans Hebrew', serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  --content-max: 1240px;
+  --player-h: 0px;
+}

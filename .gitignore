@@ -195,3 +195,10 @@ CLAUDE.md
 *sqlite-shm
 *sqlite-wal
 
+
+# frontend
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo
+# The Python 'lib/' rule above must not hide the frontend's source folder
+!frontend/src/lib/

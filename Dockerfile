@@ -3,6 +3,20 @@
 # Nothing large is baked in: episode audio is read from S3 and the search index
 # lives in PostgreSQL, both configured through environment variables at run
 # time. That keeps the image to the app itself plus ffmpeg.
+
+# ── 1. Build the React frontend into frontend/dist ─────────────────────────
+FROM node:22-slim AS frontend
+
+WORKDIR /frontend
+
+# Lockfile first so the dependency layer is cached across source edits.
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+
+COPY frontend/ ./
+RUN npm run build
+
+# ── 2. Python app serving the API and the built frontend ───────────────────
 FROM python:3.13-slim
 
 WORKDIR /app
@@ -16,6 +30,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
+# The bundle FastAPI serves (app/spa.py reads frontend/dist).
+COPY --from=frontend /frontend/dist ./frontend/dist
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \

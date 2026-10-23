@@ -12,10 +12,10 @@ decode-only helper would accept a forged token, so a real verifying library
 does the work.
 """
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from starlette.responses import RedirectResponse
-from urllib.parse import quote, urlencode
-from ..templating import render
+from urllib.parse import urlencode
+from ..spa import spa_index
 import logging
 import os
 
@@ -109,6 +109,14 @@ def require_login(request: Request) -> str:
     return claims.get("email") or claims["sub"]
 
 
+def require_api_login(request: Request) -> str:
+    """Like require_login, but answers 401 JSON instead of redirecting (for /api)."""
+    try:
+        return require_login(request)
+    except LoginRequired:
+        raise HTTPException(status_code=401, detail="login required")
+
+
 def login_url(return_to: str = "/") -> str:
     """Platform sign-in, coming back to `return_to` afterwards."""
     return f"{XHOST_LOGIN}?{urlencode({'return_to': return_to})}"
@@ -116,21 +124,19 @@ def login_url(return_to: str = "/") -> str:
 
 @router.get("/login", name="auth.login")
 def login(request: Request):
-    """Branded landing page whose button starts the platform sign-in."""
+    """Branded landing page (React) whose button starts the platform sign-in."""
     analytics = request.app.state.analytics
     if analytics:
         analytics.capture_event('page_viewed', {'page': 'login'})
 
-    google_analytics_tag = os.environ.get("GOOGLE_ANALYTICS_TAG", "")
-
-    return render(request, "login.html", google_analytics_tag=google_analytics_tag)
+    return spa_index()
 
 
 @router.get("/authorize", name="auth.authorize")
 def authorize(request: Request):
     """Hand off to the platform's Google sign-in."""
     next_url = request.query_params.get("next") or "/"
-    if not next_url.startswith("/"):        # never redirect off-site
+    if not next_url.startswith("/") or next_url[1:2] in ("/", "\\"):   # never redirect off-site
         next_url = "/"
     return RedirectResponse(url=login_url(next_url))
 

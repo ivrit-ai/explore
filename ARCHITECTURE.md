@@ -7,15 +7,15 @@
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                     Web Browser                         │
-│  (HTML/CSS/JS — RTL Hebrew UI, audio player, filters)   │
+│  React SPA (Vite + TS) — RTL Hebrew UI, player, filters │
 └──────────────────────┬──────────────────────────────────┘
                        │ HTTPS
 ┌──────────────────────▼──────────────────────────────────┐
-│                   Flask Application                      │
+│                  FastAPI Application                     │
 │                                                          │
 │  ┌────────────────────────────────────────────────────┐  │
 │  │              Routes (Blueprints)                    │  │
-│  │  main · search · audio · export · auth             │  │
+│  │  pages · api · audio · export · auth               │  │
 │  └────────────────────┬───────────────────────────────┘  │
 │                       │                                  │
 │  ┌────────────────────▼───────────────────────────────┐  │
@@ -39,59 +39,65 @@
 
 ## Dependency Pinning
 
-`requirements.txt` pins exact versions. Templates call a Flask-compatible
-`url_for` shim in `app/templating.py`, which finds a route by the `name=`
-declared on its decorator. Starlette 1.0 stopped flattening included routers
-into `app.routes`, so the shim walks the router tree; a flat scan silently
-finds nothing and turns every page into a 500. When bumping versions, run the
-backend differential test and the route smoke test, and confirm `url_for` still
-resolves every name used in `app/templates/`.
+`requirements.txt` pins exact versions. When bumping versions, run the
+backend differential test, the route smoke test and the pytest suite.
 
 ## Tech Stack
 
 | Layer | Technology |
 |-------|-----------|
-| Language | Python 3 |
-| Web framework | FastAPI + Jinja2 templates |
+| Language | Python 3 / TypeScript |
+| Web framework | FastAPI (JSON API + serves the built frontend) |
+| Frontend | React 18 + TypeScript, built with Vite; CSS modules; self-hosted fonts (Fontsource) |
 | Database | SQLite with FTS5, or PostgreSQL with tsvector + GIN |
-| Search | FTS5 full-text indexing + Python `regex` post-filtering |
+| Search | Full-text candidate filter + exact offsets (SQL for exact/partial on Postgres, Python `regex` otherwise, time-bounded) |
 | Auth | Platform-provided Google sign-in; RS256 cookie verified in-app (PyJWT) |
-| Analytics | PostHog (optional) |
-| Frontend | Vanilla JS + CSS (no framework), RTL Hebrew |
-| Audio | HTML5 `<audio>` with HTTP range requests; FFmpeg for export |
+| Analytics | PostHog (optional, server-side only) |
+| Audio | HTTP range requests; FFmpeg for clip export |
 | Audio storage | Local directory or S3 bucket (`app/services/audio_store.py`, boto3) |
 | Production server | uvicorn behind a TLS-terminating reverse proxy |
-| Data parsing | orjson, pandas, duckdb |
+| Data parsing | orjson |
 
 ## Directory Structure
 
 ```
 ├── app/
-│   ├── __init__.py              # App factory (create_app, init_index_manager)
+│   ├── __init__.py              # App factory: security headers, static mounts, routers, init_index_manager
+│   ├── spa.py                   # Serves frontend/dist/index.html
 │   ├── cli.py                   # CLI for building/inspecting the index
 │   ├── utils.py                 # FileRecord, transcript discovery
-│   ├── templating.py            # Flask-compatible url_for over Starlette routing
 │   ├── routes/
-│   │   ├── main.py              # GET / (home), GET /search (results), GET /search/metadata
-│   │   ├── search.py            # JSON API: search hits, segment lookup
+│   │   ├── pages.py             # GET /, /search, /privacy → React shell
+│   │   ├── api.py               # /api/* JSON: search, metadata, segments, me
+│   │   ├── params.py            # Shared, validated search query parameters
 │   │   ├── audio.py             # Serve audio with HTTP range request support
-│   │   ├── export.py            # CSV + audio segment export
-│   │   └── auth.py              # Google OAuth login/logout
-│   ├── services/
-│   │   ├── index.py             # IndexManager, TranscriptIndex (FTS5 queries)
-│   │   ├── search.py            # SearchService (orchestrates search flow)
-│   │   ├── db.py                # DatabaseService (SQLite connection, batching)
-│   │   └── analytics_service.py # PostHog event tracking
-│   ├── templates/               # Jinja2: base.html, home.html, results.html, login.html
-│   └── static/
-│       ├── css/                 # style.css, results.css, login.css
-│       ├── js/                  # results.js (audio player), filters.js (date/source filters)
-│       └── img/                 # favicon, Google logo
-├── Dockerfile                   # Web-tier image (app + ffmpeg; no data baked in)
+│   │   ├── export.py            # /api/export/csv and /api/export/audio/<uuid>
+│   │   └── auth.py              # Platform sign-in: identity cookie verification, login dependencies
+│   └── services/
+│       ├── index.py             # IndexManager, TranscriptIndex (FTS5 queries)
+│       ├── pg_index.py          # PostgresIndexManager, PostgresTranscriptIndex (tsvector + GIN)
+│       ├── audio_store.py       # Local / S3 audio backends
+│       ├── search.py            # SearchService (orchestrates search flow)
+│       ├── db.py                # DatabaseService (SQLite connection, batching)
+│       └── analytics_service.py # PostHog event tracking
+├── frontend/
+│   ├── src/
+│   │   ├── api/                 # Typed fetch client + response types
+│   │   ├── components/          # ui/ primitives, results/, player/, filters/, search/, layout/
+│   │   ├── lib/                 # highlight, regex pattern, insights, URL state (unit-tested)
+│   │   ├── player/              # PlayerProvider: one audio element shared by every result
+│   │   ├── pages/               # Home, Results, Login, Privacy
+│   │   └── styles/              # Design tokens + base styles
+│   ├── public/static/           # Logo, favicon, Google logo
+│   └── dist/                    # Build output (not committed; built in the Docker image or by deploy.sh)
+├── tests/                       # pytest: API, auth, validation, export
+├── Dockerfile                   # Multi-stage: Node builds the frontend, Python image serves it (no data baked in)
 ├── run.py                       # Local/standalone entry point (uvicorn, logging)
 ├── wsgi.py                      # ASGI entry point used by the container
 ├── app.py                       # Development entry point
-├── start.sh                     # uWSGI production startup script
+├── start.sh                     # Startup script for running from a checkout
+├── deploy.sh                    # Checkout deploy: pull, install, build frontend
+├── .env.example                 # Settings template (names only)
 ├── explore.sqlite               # FTS5 database (~6.4 GB, ~35K docs, ~33M segments)
 └── requirements.txt
 ```
@@ -303,20 +309,23 @@ against a temporary local copy.
 
 ## API Endpoints
 
+All `/api/*` endpoints require login and answer `401` JSON when the session is missing.
+
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/` | Home page with search form |
-| `GET` | `/search` | Search results page (HTML, paginated) |
-| `GET` | `/search/metadata` | JSON: available sources + date range for current query |
-| `GET` | `/search/` | JSON search API |
-| `POST` | `/search/segment` | Batch segment lookup by char_offset |
-| `POST` | `/search/segment/by_idx` | Batch segment lookup by segment_idx |
-| `GET` | `/audio/<doc_uuid>` | Serve audio file (range requests) |
-| `GET` | `/export/results` | CSV export of search results |
-| `GET` | `/export/segment/<source>/<path>` | Audio segment MP3 via FFmpeg |
-| `GET` | `/login` | Google OAuth login |
-| `GET` | `/authorize` | OAuth redirect |
-| `GET` | `/logout` | Clear session |
+| `GET` | `/`, `/search`, `/privacy`, `/login` | React app shell (pages require login except privacy and login) |
+| `GET` | `/api/me` | Current user's email |
+| `GET` | `/api/search` | Results grouped by episode; each hit carries segment text, timing, the match span and regex group spans |
+| `GET` | `/api/search/metadata` | Source counts and date range for the query |
+| `GET` | `/api/episodes/<idx>/segments?center=&radius=` | Transcript context around a segment (radius ≤ 10) |
+| `GET` | `/api/export/csv` | CSV export of all results |
+| `GET` | `/api/export/audio/<uuid>?start=&end=` | MP3 clip via FFmpeg (≤ 600 s) |
+| `GET` | `/audio/<uuid>` | Episode audio (range requests) |
+| `GET` | `/authorize`, `/logout` | Hand off to the platform sign-in / sign-out (`/xhost-auth/*`) |
+
+Search parameters: `q` (≤ 200 chars), `mode` (`exact`/`partial`/`regex`), `date_from`/`date_to` (`YYYY-MM-DD`),
+repeated `source`, `page`, `per_page` (≤ 500), `shuffle`, `seed`.
+An invalid regex returns `400`; a regex scan over its 5 s budget returns `422`.
 
 ## Key Services
 
@@ -337,25 +346,32 @@ PostHog wrapper. Tracks searches, page views, exports, and errors. Can be disabl
 
 ## Frontend
 
-- **No JS framework** — vanilla JavaScript with two main modules:
-  - `results.js` — audio player management (lazy load queue, single-instance playback), batch segment fetching with caching.
-  - `filters.js` — date range pickers, multi-select source filter, URL parameter sync.
-- **RTL layout** — `lang="he" dir="rtl"`, Rubik font for Hebrew text.
-- **Templates** — Jinja2 with `base.html` layout, partials for pagination.
+- **React + TypeScript SPA** built by Vite into `frontend/dist`, served by FastAPI (same origin, no CORS).
+- **State in the URL**: every results page is `/search?q=…&mode=…&source=…&seed=…`, so it can be shared and reloaded.
+- **One player**: `PlayerProvider` owns a single audio element; result rows, the sticky bottom bar and the
+  full-screen mobile player all drive it. Time updates live in a separate context so long lists don't re-render.
+- **Highlighting** uses spans computed by the server (code points, relative to the segment), so exact, partial
+  and regex (with numbered capture groups) all highlight what actually matched.
+- **Responsive**: under 820px the filter sidebar becomes a bottom sheet and the player becomes a mini bar.
+- **Dev**: `npm run dev` on :5173 proxies `/api`, `/audio` and the auth routes to the backend on :5000.
 
 ## Authentication Summary
 
 - **Production:** the hosting platform's Google sign-in; the app verifies the
-  signed identity cookie itself. `Depends(require_login)` on all content
-  routes. See **Authentication** above for the verification rules.
+  signed identity cookie itself. Page routes redirect to `/xhost-auth/login`;
+  `/api/*` returns `401` and the React app shows `/login`, whose button starts
+  the platform sign-in. See **Authentication** above for the verification rules.
+- **No app session:** there is no session cookie and no `SECRET_KEY`.
 - **Development:** bypassed when `APP_ENV=development`, using `TS_USER_EMAIL`
   as the mock identity.
 
 ## Configuration
 
+Settings are read from the environment or a `.env` file next to the app (see `.env.example`; `.env` is never committed).
+
 | Variable | Purpose |
 |----------|---------|
-| `DATABASE_URL` | Postgres index connection (injected by the host) |
+| `DATABASE_URL` / `DATABASE_URL_DIRECT` | Postgres index connection (injected by the host; DIRECT bypasses the pooler) |
 | `EXPLORE_INDEX_BACKEND` | `auto` (default) / `sqlite` / `postgres` |
 | `SQLITE_PATH` | SQLite index path when that backend is used (default: `explore.sqlite`) |
 | `EXPLORE_AUDIO_SOURCE` | `auto` (default) / `local` / `s3` |
@@ -364,20 +380,23 @@ PostHog wrapper. Tracks searches, page views, exports, and errors. Can be disabl
 | `EXPLORE_S3_PRESIGN_TTL` | Lifetime of presigned URLs given to FFmpeg (default 3600) |
 | `EXPLORE_AUTH_AUDIENCES` | Hostnames whose identity tokens are accepted (defaults to the request host) |
 | `APP_ENV` | `development` / `production` |
-| `SECRET_KEY` | Session middleware secret |
 | `TS_USER_EMAIL` | Dev-mode email bypass |
 | `POSTHOG_API_KEY` / `POSTHOG_HOST` | Analytics (optional) |
 | `DISABLE_ANALYTICS` | `true` to disable PostHog |
 
 ## Deployment
 
-**Production** runs the `Dockerfile` image: uvicorn serving `wsgi:app` on the
-port the host injects, with ffmpeg for segment export. Nothing large is baked
-in — audio comes from S3 and the index from Postgres, both configured by
-environment variable. TLS is terminated by the platform.
+**Production** runs the `Dockerfile` image: a Node stage builds `frontend/dist`,
+then uvicorn serves `wsgi:app` on the port the host injects, with ffmpeg for
+clip export. Nothing large is baked in — audio comes from S3 and the index from
+Postgres, both configured by environment variable. TLS is terminated by the
+platform.
 
-`start.sh` still runs the app directly from a checkout for local or
-single-machine use.
+`start.sh` / `deploy.sh` still run the app from a checkout for local or
+single-machine use (`deploy.sh` requires Node 20+ and builds `frontend/dist`).
+
+Responses carry a strict Content-Security-Policy (same-origin scripts, styles, fonts and media only),
+`X-Frame-Options: DENY` and `nosniff`. Hashed assets under `/assets` are cached for a year; the HTML shell is never cached.
 
 **Index build** is a separate CLI step (`python -m app.cli build --data-dir <path>`) that must run before the app starts. The `--auto-build` flag on `run.py` can trigger it at startup.
 

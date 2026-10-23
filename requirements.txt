@@ -1,13 +1,12 @@
 # Pinned to exact versions so a rebuild cannot silently change behaviour.
 # Upgrade deliberately: run the differential test and the route smoke test,
-# and check that url_for still resolves every template route name.
+# and the pytest suite (tests/).
 fastapi==0.141.1
 starlette==1.6.0
 pyjwt[crypto]==2.13.0
 uvicorn[standard]==0.52.4
 httpx2==2.12.0   # required by starlette.testclient
 python-multipart==0.0.32
-jinja2==3.1.6
 click==8.5.0
 orjson==3.12.0
 python-dotenv==1.2.3
