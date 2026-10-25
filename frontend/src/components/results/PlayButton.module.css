@@ -49,7 +49,7 @@
   align-items: center;
   justify-content: center;
   border-radius: var(--r-pill);
-  background: #232120;
+  background: var(--disc);
   color: var(--tx);
   transition: background-color 150ms var(--ease-out);
 }
@@ -73,7 +73,7 @@
   width: 14px;
   height: 14px;
   border-radius: var(--r-pill);
-  border: 2px solid rgba(7, 22, 36, 0.3);
+  border: 2px solid var(--spinner-track);
   border-top-color: var(--accent-ink);
   animation: spin 800ms linear infinite;
 }

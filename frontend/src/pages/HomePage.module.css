@@ -108,11 +108,11 @@
 }
 
 .example:hover {
-  background: #1a1917;
+  background: var(--row-hover);
 }
 
 .example:active {
-  background: #211f1c;
+  background: var(--row-press);
 }
 
 .exampleDesc {
@@ -170,7 +170,7 @@
   font-family: var(--font-mono);
   font-size: 13px;
   line-height: 1.75;
-  color: #d9d4cc;
+  color: var(--code-ink);
   text-align: left;
 }
 

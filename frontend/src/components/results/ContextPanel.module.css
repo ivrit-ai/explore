@@ -44,7 +44,7 @@
 }
 
 .live .time {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .text {

@@ -18,11 +18,11 @@
 }
 
 .row:hover {
-  background: #1f1d1a;
+  background: var(--row-hover);
 }
 
 .row:active {
-  background: #262420;
+  background: var(--row-press);
 }
 
 .row:focus-visible {
@@ -42,7 +42,7 @@
   align-items: center;
   justify-content: center;
   border-radius: var(--r-sm);
-  border: 1.5px solid #4a463f;
+  border: 1.5px solid var(--line-3);
   transition:
     background-color 150ms var(--ease-out),
     border-color 150ms var(--ease-out);

@@ -6,7 +6,7 @@
   border-radius: var(--r-md);
   border: 1px solid var(--line);
   background: var(--s1);
-  box-shadow: 0 30px 60px -40px rgba(0, 0, 0, 0.9);
+  box-shadow: 0 30px 60px -40px var(--shadow);
 }
 
 .heroTitle {
@@ -33,7 +33,7 @@
 
 .field:focus-within {
   border-color: var(--tx);
-  box-shadow: 0 0 0 3px rgba(238, 234, 228, 0.08);
+  box-shadow: 0 0 0 3px var(--focus-soft);
 }
 
 .heroField {
@@ -76,7 +76,7 @@
 .error {
   margin: 0;
   font-size: 13px;
-  color: #f6cdbf;
+  color: var(--danger-ink);
 }
 
 .hint {
@@ -119,7 +119,6 @@
   background: var(--bg);
   font-family: var(--font-mono);
   font-size: 14px;
-  color-scheme: dark;
 }
 
 .divider {

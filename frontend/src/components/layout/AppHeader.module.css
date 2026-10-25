@@ -28,10 +28,14 @@
   text-decoration: none;
 }
 
+/* The image is only the shape; the text colour fills it, so it fits both themes. */
 .logo {
+  width: 21px;
   height: 28px;
-  width: auto;
   display: block;
+  background-color: var(--tx);
+  -webkit-mask: url('/static/logo-light.png') center / contain no-repeat;
+  mask: url('/static/logo-light.png') center / contain no-repeat;
 }
 
 .name {

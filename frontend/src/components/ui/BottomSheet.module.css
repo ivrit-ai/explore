@@ -9,7 +9,7 @@
 .backdrop {
   position: absolute;
   inset: 0;
-  background: rgba(8, 7, 6, 0.72);
+  background: var(--scrim);
   animation: fade 200ms var(--ease-out);
 }
 
@@ -22,7 +22,7 @@
   background: var(--s1);
   border-top: 1px solid var(--line-2);
   border-radius: var(--r-md) var(--r-md) 0 0;
-  box-shadow: 0 -24px 60px rgba(0, 0, 0, 0.6);
+  box-shadow: 0 -24px 60px var(--shadow-soft);
   animation: rise 280ms var(--spring);
   outline: none;
 }

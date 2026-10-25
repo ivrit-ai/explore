@@ -5,6 +5,7 @@ import { useAsync } from '../../hooks/useAsync';
 import { MenuIcon } from '../icons';
 import { BottomSheet } from '../ui/BottomSheet';
 import { IconButton } from '../ui/IconButton';
+import { ThemeToggle } from './ThemeToggle';
 import styles from './AppHeader.module.css';
 
 /** The hosting platform owns the session; signing out goes through it. */
@@ -19,7 +20,7 @@ const LINKS = [
 export function Brand() {
   return (
     <Link to="/" className={styles.brand}>
-      <img src="/static/logo-light.png" alt="" className={styles.logo} />
+      <span className={styles.logo} aria-hidden="true" />
       <span className={styles.name}>ivrit.ai</span>
       <span className={styles.explore}>EXPLORE</span>
     </Link>
@@ -55,6 +56,7 @@ export function AppHeader({ children, signedIn = true, sticky }: Props) {
             </a>
           )}
         </nav>
+        <ThemeToggle />
         <IconButton label="תפריט" className={styles.menuButton} onClick={() => setMenuOpen(true)}>
           <MenuIcon />
         </IconButton>
